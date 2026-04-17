@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FileText, RefreshCw, Download } from 'lucide-react';
+import { getAuthHeaders } from '../lib/api.ts';
 
 interface Props {
     notify?: (msg: string, type: 'success' | 'error' | 'info') => void;
@@ -13,9 +14,8 @@ export default function LogsView({ notify }: Props) {
     const fetchLogs = async () => {
         setLoading(true);
         try {
-            const token = localStorage.getItem('laplace_token') || '';
-            const res = await fetch('http://localhost:11228/api/server/logs/history', {
-                headers: { 'x-auth-token': `laplace@${token}` }
+            const res = await fetch('/api/server/logs/history?lines=1200', {
+                headers: getAuthHeaders()
             });
             const response = await res.json();
             if (response.success && response.data) {

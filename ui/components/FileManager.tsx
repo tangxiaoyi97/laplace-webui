@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Folder, FileText, MoreVertical, UploadCloud, Search, Trash2, Edit, X, Save, FileCode, ArrowUp, Loader2, Download } from 'lucide-react';
 import type { FileItem } from '../types.ts';
+import { getAuthHeaders } from '../lib/api.ts';
 
 interface Props {
     notify?: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
-const API_BASE = 'http://localhost:11228/api/files';
+const API_BASE = '/api/files';
 
 export default function FileManager({ notify }: Props) {
   const [path, setPath] = useState('/');
@@ -16,14 +17,12 @@ export default function FileManager({ notify }: Props) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const getTokenHeader = () => `laplace@${localStorage.getItem('laplace_token') || ''}`;
-
   const fetchFiles = async (p: string) => {
       setLoading(true);
       try {
           const encodedPath = encodeURIComponent(p);
           const res = await fetch(`${API_BASE}/list?path=${encodedPath}`, {
-              headers: { 'x-auth-token': getTokenHeader() }
+              headers: getAuthHeaders()
           });
           const response = await res.json();
           if (res.ok && response.success && Array.isArray(response.data)) {
@@ -60,7 +59,7 @@ export default function FileManager({ notify }: Props) {
   const handleEdit = async (filePath: string) => {
       try {
           const res = await fetch(`${API_BASE}/content?path=${encodeURIComponent(filePath)}`, {
-              headers: { 'x-auth-token': getTokenHeader() }
+              headers: getAuthHeaders()
           });
           const response = await res.json();
           if (!response.success) {
@@ -78,7 +77,7 @@ export default function FileManager({ notify }: Props) {
       try {
           const res = await fetch(`${API_BASE}/write`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-auth-token': getTokenHeader() },
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
               body: JSON.stringify({ path: editingFile.path, content: editingFile.content })
           });
           const response = await res.json();
@@ -99,7 +98,7 @@ export default function FileManager({ notify }: Props) {
       try {
           const res = await fetch(`${API_BASE}/delete`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-auth-token': getTokenHeader() },
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
               body: JSON.stringify({ path: filePath })
           });
           const response = await res.json();
@@ -114,10 +113,32 @@ export default function FileManager({ notify }: Props) {
       }
   };
 
-  const handleDownload = (filePath: string) => {
-      // NOTE: For browser downloads via new tab, auth headers are hard. 
-      // We rely on cookie authentication for thisGET request which also defaults to 'laplace' type on backend.
-      window.open(`${API_BASE}/download?path=${encodeURIComponent(filePath)}`, '_blank');
+  const handleDownload = async (filePath: string) => {
+      try {
+          const response = await fetch(`${API_BASE}/download?path=${encodeURIComponent(filePath)}`, {
+              headers: getAuthHeaders()
+          });
+          if (!response.ok) {
+              throw new Error('Download failed');
+          }
+
+          const blob = await response.blob();
+          const disposition = response.headers.get('content-disposition') || '';
+          const matchedName = disposition.match(/filename="?([^"]+)"?/i)?.[1];
+          const fallbackName = filePath.split('/').pop() || 'download.bin';
+          const fileName = matchedName || fallbackName;
+
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = fileName;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          URL.revokeObjectURL(url);
+      } catch (e) {
+          notify?.('Download failed', 'error');
+      }
   };
 
   const triggerUpload = () => {
@@ -136,7 +157,7 @@ export default function FileManager({ notify }: Props) {
       try {
           const res = await fetch(`${API_BASE}/upload`, {
               method: 'POST',
-              headers: { 'x-auth-token': getTokenHeader() },
+              headers: getAuthHeaders(),
               body: formData
           });
           const response = await res.json();

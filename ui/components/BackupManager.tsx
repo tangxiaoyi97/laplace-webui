@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Archive, Plus, Trash2, RotateCw, RotateCcw, Clock, HardDrive, AlertTriangle, Lock, Download } from 'lucide-react';
 import type { BackupItem } from '../types.ts';
+import type { ServerStatus } from '../types.ts';
+import { getAuthHeaders } from '../lib/api.ts';
 
 interface Props {
     notify?: (msg: string, type: 'success' | 'error' | 'info') => void;
@@ -10,25 +12,21 @@ export default function BackupManager({ notify }: Props) {
     const [backups, setBackups] = useState<BackupItem[]>([]);
     const [loading, setLoading] = useState(false);
     const [creating, setCreating] = useState(false);
-    const [status, setStatus] = useState<string>('OFFLINE');
-
-    const getTokenHeader = () => `laplace@${localStorage.getItem('laplace_token') || ''}`;
+    const [status, setStatus] = useState<ServerStatus>({ running: false, activeServerId: null, status: 'OFFLINE' });
 
     const fetchData = async () => {
         setLoading(true);
         try {
             const [bRes, sRes] = await Promise.all([
-                fetch('http://localhost:11228/api/backups', { headers: { 'x-auth-token': getTokenHeader() } }),
-                fetch('http://localhost:11228/api/server/status', { headers: { 'x-auth-token': getTokenHeader() } })
+                fetch('/api/backups', { headers: getAuthHeaders() }),
+                fetch('/api/server/status', { headers: getAuthHeaders() })
             ]);
 
             const bData = await bRes.json();
             const sData = await sRes.json();
 
             if (bRes.ok && bData.success && Array.isArray(bData.data)) setBackups(bData.data);
-            if (sRes.ok && sData.success) {
-                setStatus(sData.data.status);
-            }
+            if (sRes.ok && sData.success) setStatus(sData.data);
         } catch (e) {
             console.error(e);
             notify?.('Failed to load backup data', 'error');
@@ -43,15 +41,15 @@ export default function BackupManager({ notify }: Props) {
     }, []);
 
     const handleCreate = async () => {
-        if (status !== 'OFFLINE') {
+        if (status.status !== 'OFFLINE' || status.busy) {
             notify?.('Server must be OFFLINE to create a backup.', 'error');
             return;
         }
         setCreating(true);
         try {
-            const res = await fetch('http://localhost:11228/api/backups/create', {
+            const res = await fetch('/api/backups/create', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'x-auth-token': getTokenHeader() },
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({}) // Can add name support later
             });
             const response = await res.json();
@@ -70,9 +68,9 @@ export default function BackupManager({ notify }: Props) {
     const handleDelete = async (id: string) => {
         if (!confirm('Are you sure you want to delete this backup?')) return;
         try {
-            const res = await fetch('http://localhost:11228/api/backups/delete', {
+            const res = await fetch('/api/backups/delete', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'x-auth-token': getTokenHeader() },
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ id })
             });
             const response = await res.json();
@@ -89,7 +87,7 @@ export default function BackupManager({ notify }: Props) {
 
     const handleRestore = async (id: string) => {
         // Double Check Client Side
-        if (status !== 'OFFLINE') {
+        if (status.status !== 'OFFLINE' || status.busy) {
             notify?.('Action Blocked: Server must be OFFLINE to restore.', 'error');
             return;
         }
@@ -97,9 +95,9 @@ export default function BackupManager({ notify }: Props) {
         
         try {
             notify?.('Restore started. Please wait...', 'info');
-            const res = await fetch('http://localhost:11228/api/backups/restore', {
+            const res = await fetch('/api/backups/restore', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'x-auth-token': getTokenHeader() },
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ id })
             });
             const response = await res.json();
@@ -113,9 +111,30 @@ export default function BackupManager({ notify }: Props) {
         }
     };
 
-    const handleDownload = (id: string) => {
-        // Direct browser download via new tab using cookie for auth
-        window.open(`http://localhost:11228/api/backups/download?id=${id}`, '_blank');
+    const handleDownload = async (id: string) => {
+        try {
+            const response = await fetch(`/api/backups/download?id=${encodeURIComponent(id)}`, {
+                headers: getAuthHeaders()
+            });
+            if (!response.ok) {
+                throw new Error('Download failed');
+            }
+
+            const blob = await response.blob();
+            const disposition = response.headers.get('content-disposition') || '';
+            const matchedName = disposition.match(/filename="?([^"]+)"?/i)?.[1];
+            const fileName = matchedName || `${id}.zip`;
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = fileName;
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            notify?.('Backup download failed', 'error');
+        }
     };
 
     const formatSize = (bytes: number) => {
@@ -126,7 +145,7 @@ export default function BackupManager({ notify }: Props) {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
-    const isLocked = status !== 'OFFLINE';
+    const isLocked = status.status !== 'OFFLINE' || Boolean(status.busy);
 
     return (
         <div className="h-full flex flex-col bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden relative">
@@ -216,7 +235,7 @@ export default function BackupManager({ notify }: Props) {
                 {isLocked ? <Lock size={16}/> : <AlertTriangle size={16} />}
                 <span>
                     {isLocked 
-                        ? "Backup creation and restoration are disabled because the server is currently online. Please stop the server first." 
+                        ? "Backup creation and restoration are disabled because the server is online or another runtime operation is in progress." 
                         : "Restoring a backup will overwrite your current server files."}
                 </span>
             </div>

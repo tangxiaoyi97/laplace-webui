@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Power, StopCircle, Plus, RotateCw } from 'lucide-react';
 import { ViewState } from '../types.ts';
+import type { ServerStatus } from '../types.ts';
 import Terminal from './Terminal.tsx';
+import { getAuthHeaders } from '../lib/api.ts';
 
-const API_URL = 'http://localhost:11228/api';
+const API_URL = '/api';
 
 interface Props {
     onNavigate?: (view: ViewState) => void;
@@ -11,16 +13,13 @@ interface Props {
 }
 
 export default function Dashboard({ onNavigate, notify }: Props) {
-  const [status, setStatus] = useState<any>({ running: false, activeServerId: null, status: 'OFFLINE' });
+  const [status, setStatus] = useState<ServerStatus>({ running: false, activeServerId: null, status: 'OFFLINE' });
   const [processing, setProcessing] = useState(false);
-
-  // Prepend default type
-  const getTokenHeader = () => `laplace@${localStorage.getItem('laplace_token') || ''}`;
 
   useEffect(() => {
     const poll = async () => {
         try {
-            const res = await fetch(`${API_URL}/server/status`, { headers: { 'x-auth-token': getTokenHeader() } });
+            const res = await fetch(`${API_URL}/server/status`, { headers: getAuthHeaders() });
             if (res.ok) {
                 const response = await res.json();
                 if (response.success && response.data) {
@@ -40,8 +39,11 @@ export default function Dashboard({ onNavigate, notify }: Props) {
     return () => clearInterval(interval);
   }, []);
 
+  const isBusy = processing || Boolean(status.busy) || ['STARTING', 'STOPPING', 'RESTARTING'].includes(status.status);
+  const busyLabel = status.busyScopes?.length ? status.busyScopes.join(', ') : 'panel-runtime';
+
   const handlePower = async (action: 'start' | 'stop' | 'restart') => {
-      if (processing) return;
+      if (isBusy) return;
       if (action === 'start' && status.running) { notify?.('Server is already running', 'error'); return; }
       if (action === 'stop' && !status.running) { notify?.('Server is not running', 'error'); return; }
 
@@ -49,7 +51,7 @@ export default function Dashboard({ onNavigate, notify }: Props) {
       try {
           const res = await fetch(`${API_URL}/server/${action}`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-auth-token': getTokenHeader() }
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' })
           });
           const response = await res.json();
           if (res.ok && response.success) {
@@ -100,23 +102,23 @@ export default function Dashboard({ onNavigate, notify }: Props) {
            {!status.running ? (
                <button 
                 onClick={() => handlePower('start')} 
-                disabled={processing}
+                disabled={isBusy}
                 className="flex items-center space-x-2 px-6 py-3 bg-laplace-darker text-white rounded-xl shadow-lg shadow-gray-900/20 hover:bg-black transition-all font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-0.5"
                >
-                   <Power size={18} /> <span>{processing ? 'Booting...' : 'Start Server'}</span>
+                   <Power size={18} /> <span>{isBusy ? 'Working...' : 'Start Server'}</span>
                </button>
            ) : (
                <>
                    <button 
                     onClick={() => handlePower('restart')} 
-                    disabled={processing}
+                    disabled={isBusy}
                     className="flex items-center space-x-2 px-4 py-3 bg-amber-500 text-white rounded-xl shadow-lg shadow-amber-500/20 hover:bg-amber-600 transition-all font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-0.5"
                    >
                        <RotateCw size={18} /> <span>Restart</span>
                    </button>
                    <button 
                     onClick={() => handlePower('stop')} 
-                    disabled={processing}
+                    disabled={isBusy}
                     className="flex items-center space-x-2 px-6 py-3 bg-red-500 text-white rounded-xl shadow-lg shadow-red-500/20 hover:bg-red-600 transition-all font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-0.5"
                    >
                        <StopCircle size={18} /> <span>Stop</span>
@@ -125,6 +127,12 @@ export default function Dashboard({ onNavigate, notify }: Props) {
            )}
         </div>
       </div>
+
+      {status.busy && (
+        <div className="px-4 py-3 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800 text-sm font-medium">
+          Runtime operation in progress: {busyLabel}. Control actions are temporarily locked.
+        </div>
+      )}
 
       <div className="flex-1 bg-laplace-darker rounded-3xl p-1.5 overflow-hidden shadow-inner border border-gray-800 flex flex-col relative">
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 opacity-50"></div>

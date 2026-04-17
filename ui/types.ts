@@ -79,6 +79,8 @@ export interface ServerStatus {
     activeServerId: string | null;
     serverName?: string;
     startTime?: number;
+    busy?: boolean;
+    busyScopes?: string[];
 }
 
 export type WSMessage = 

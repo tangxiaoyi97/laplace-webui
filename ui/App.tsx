@@ -9,6 +9,7 @@ import ServerSettings from './components/ServerSettings.tsx';
 import BackupManager from './components/BackupManager.tsx';
 import PublicHome from './components/PublicHome.tsx';
 import { ViewState } from './types.ts';
+import { clearStoredToken, fetchAuthed, getStoredToken, setStoredToken } from './lib/api.ts';
 
 interface Toast {
     id: number;
@@ -36,6 +37,7 @@ function AdminPanel() {
   const [loading, setLoading] = useState(true);
   const [hasServer, setHasServer] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [tokenInput, setTokenInput] = useState('');
 
   const notify = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
       const id = Date.now();
@@ -43,20 +45,23 @@ function AdminPanel() {
       setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
   }, []);
 
+  const readTokenFromLocation = (): string | null => {
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+      return hashParams.get('token');
+  };
+
   // 1. Initial Token Check
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const urlToken = params.get('token');
+    const urlToken = readTokenFromLocation();
     
     if (urlToken) {
-      localStorage.setItem('laplace_token', urlToken);
-      document.cookie = `laplace_token=${urlToken}; path=/; max-age=86400; SameSite=Strict`;
+      setStoredToken(urlToken);
       window.history.replaceState({}, '', '/dashboard');
     }
 
-    const storedToken = localStorage.getItem('laplace_token');
+    const storedToken = getStoredToken();
     if (storedToken) {
-        verifyToken(storedToken);
+        verifyToken();
     } else {
         setLoading(false);
     }
@@ -66,26 +71,21 @@ function AdminPanel() {
   useEffect(() => {
       if (!auth) return;
 
-      const token = localStorage.getItem('laplace_token');
-      if (token) checkServerStatus(token);
+      checkServerStatus();
 
       const interval = setInterval(() => {
-          if (token) checkServerStatus(token);
+          checkServerStatus();
       }, 10000);
 
       return () => clearInterval(interval);
   }, [auth]);
 
-  const verifyToken = async (token: string) => {
+  const verifyToken = async () => {
       try {
-          const authHeader = `laplace@${token}`;
-          const res = await fetch('http://localhost:11228/api/auth/check', { 
-              headers: { 'x-auth-token': authHeader } 
-          });
+          const res = await fetchAuthed('/auth/check');
           
           if (res.ok) {
               setAuth(true);
-              document.cookie = `laplace_token=${token}; path=/; max-age=86400; SameSite=Strict`;
           } else {
               cleanupAuth();
           }
@@ -98,16 +98,14 @@ function AdminPanel() {
   };
 
   const cleanupAuth = () => {
-      localStorage.removeItem('laplace_token');
-      document.cookie = 'laplace_token=; path=/; max-age=0';
+      clearStoredToken();
       setAuth(false);
+      setTokenInput('');
   };
 
-  const checkServerStatus = async (token: string) => {
+  const checkServerStatus = async () => {
       try {
-          const res = await fetch('http://localhost:11228/api/server/status', { 
-              headers: { 'x-auth-token': `laplace@${token}` } 
-          });
+          const res = await fetchAuthed('/server/status');
           const response = await res.json();
           if (response.success && response.data) {
               const active = !!response.data.activeServerId;
@@ -141,6 +139,25 @@ function AdminPanel() {
               </div>
               <h1 className="text-3xl font-black text-laplace-darker mb-2 z-10">Access Restricted</h1>
               <p className="text-gray-400 text-center max-w-sm mb-6 z-10">Security Checkpoint. Use the token provided in your server console.</p>
+              <div className="w-full max-w-md bg-white border border-gray-200 rounded-2xl p-4 mb-4 z-10 shadow-soft">
+                  <input
+                    type="password"
+                    value={tokenInput}
+                    onChange={(e) => setTokenInput(e.target.value.trim())}
+                    placeholder="Paste admin token"
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:border-laplace-primary text-sm"
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!tokenInput) return;
+                      setStoredToken(tokenInput);
+                      await verifyToken();
+                    }}
+                    className="w-full mt-3 px-4 py-2 rounded-xl bg-laplace-primary text-white text-sm font-bold hover:bg-opacity-90 transition-all"
+                  >
+                    Verify Token
+                  </button>
+              </div>
               <button onClick={() => window.location.href = '/'} className="px-6 py-2 rounded-xl bg-white border border-gray-200 text-sm font-bold text-gray-600 hover:text-laplace-primary hover:border-laplace-primary/30 transition-all z-10">
                   Return Home
               </button>

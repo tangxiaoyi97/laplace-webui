@@ -5,6 +5,7 @@ import {
     MoreHorizontal, X, User, Crown, AlertTriangle, CheckCircle, List, UserCheck, UserX, Link as LinkIcon,
     Copy
 } from 'lucide-react';
+import { getAuthHeaders } from '../lib/api.ts';
 
 interface Props {
     notify?: (msg: string, type: 'success' | 'error' | 'info') => void;
@@ -22,13 +23,11 @@ export default function PlayerManager({ notify }: Props) {
   const [currentTab, setCurrentTab] = useState<TabType>('all');
   const [isWhitelistMode, setIsWhitelistMode] = useState(false); // Default assumes false until fetched
 
-  const getTokenHeader = () => `laplace@${localStorage.getItem('laplace_token') || ''}`;
-
   const fetchState = async () => {
       try {
           // Fetch Players
-          const pRes = await fetch('http://localhost:11228/api/players', {
-              headers: { 'x-auth-token': getTokenHeader() }
+          const pRes = await fetch('/api/players', {
+              headers: getAuthHeaders()
           });
           const pResponse = await pRes.json();
           if (pResponse.success && Array.isArray(pResponse.data)) {
@@ -36,8 +35,8 @@ export default function PlayerManager({ notify }: Props) {
           }
 
           // Fetch Settings to determine mode
-          const sRes = await fetch('http://localhost:11228/api/server/settings', {
-              headers: { 'x-auth-token': getTokenHeader() }
+          const sRes = await fetch('/api/server/settings', {
+              headers: getAuthHeaders()
           });
           const sResponse = await sRes.json();
           if (sRes.ok && sResponse.success) {
@@ -60,12 +59,9 @@ export default function PlayerManager({ notify }: Props) {
       if (!selectedPlayer) return;
       setActionLoading(true);
       try {
-          const res = await fetch('http://localhost:11228/api/players/action', {
+          const res = await fetch('/api/players/action', {
               method: 'POST',
-              headers: { 
-                  'Content-Type': 'application/json',
-                  'x-auth-token': getTokenHeader() 
-              },
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
               body: JSON.stringify({
                   uuid: selectedPlayer.uuid,
                   name: selectedPlayer.name,

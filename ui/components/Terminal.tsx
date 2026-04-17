@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Terminal as TerminalIcon, Send, WifiOff } from 'lucide-react';
 import type { WSMessage, LogEntry } from '../types.ts';
+import { getWebSocketProtocol, getWebSocketUrl } from '../lib/api.ts';
 
 interface Props {
     serverRunning: boolean;
@@ -18,10 +19,13 @@ export default function Terminal({ serverRunning }: Props) {
     const shouldScrollRef = useRef(true);
 
     const connect = () => {
-        const token = localStorage.getItem('laplace_token') || '';
-        // Send composite token via URL param
-        const wsToken = `laplace@${token}`;
-        const ws = new WebSocket(`ws://localhost:11228?token=${encodeURIComponent(wsToken)}`);
+        const wsProtocol = getWebSocketProtocol();
+        if (!wsProtocol) {
+            setConnected(false);
+            return;
+        }
+
+        const ws = new WebSocket(getWebSocketUrl(), wsProtocol);
         
         ws.onopen = () => setConnected(true);
         

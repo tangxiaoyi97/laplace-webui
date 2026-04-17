@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, Save, RefreshCw, Cpu, Layers, Shield, Globe, Terminal, Info } from 'lucide-react';
 import type { ServerConfig, ServerSettingsPayload } from '../types.ts';
+import { getAuthHeaders } from '../lib/api.ts';
 
 interface Props {
     notify?: (msg: string, type: 'success' | 'error' | 'info') => void;
@@ -21,13 +22,11 @@ export default function ServerSettings({ notify }: Props) {
         viewDistance: '10'
     });
 
-    const getTokenHeader = () => `laplace@${localStorage.getItem('laplace_token') || ''}`;
-
     const fetchSettings = async () => {
         setLoading(true);
         try {
-            const res = await fetch('http://localhost:11228/api/server/settings', {
-                headers: { 'x-auth-token': getTokenHeader() }
+            const res = await fetch('/api/server/settings', {
+                headers: getAuthHeaders()
             });
             const response = await res.json();
             
@@ -70,12 +69,9 @@ export default function ServerSettings({ notify }: Props) {
         updatedProperties['view-distance'] = quickSettings.viewDistance;
 
         try {
-            const res = await fetch('http://localhost:11228/api/server/settings', {
+            const res = await fetch('/api/server/settings', {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'x-auth-token': getTokenHeader() 
-                },
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({
                     config: config,
                     properties: updatedProperties

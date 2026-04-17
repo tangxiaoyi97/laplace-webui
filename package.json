@@ -1,0 +1,8 @@
+{
+  "name": "laplace-webui",
+  "version": "4.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Official WebUI plugin for laplace-core.",
+  "license": "MIT"
+}

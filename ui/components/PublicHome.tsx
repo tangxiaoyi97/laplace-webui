@@ -8,7 +8,7 @@ export default function PublicHome() {
 
     const fetchInfo = async () => {
         try {
-            const res = await fetch('http://localhost:11228/api/public/info');
+            const res = await fetch('/api/public/info');
             if (res.ok) {
                 const response = await res.json();
                 if (response.success && response.data) {

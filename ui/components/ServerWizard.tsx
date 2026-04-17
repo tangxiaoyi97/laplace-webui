@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Upload, FileText, Settings as SettingsIcon, Tag, Check, ArrowRight, ArrowLeft, Loader2, Info, AlertCircle } from 'lucide-react';
 import { ViewState } from '../types.ts';
+import { getAuthHeaders } from '../lib/api.ts';
 
 interface Props {
   onViewChange: (view: ViewState) => void;
@@ -61,12 +62,9 @@ export default function ServerWizard({ onViewChange, notify }: Props) {
             data.append('maxPlayers', formData.maxPlayers);
             data.append('motd', formData.motd);
             
-            const token = localStorage.getItem('laplace_token') || '';
-            const res = await fetch('http://localhost:11228/api/server/create', {
+            const res = await fetch('/api/server/create', {
                 method: 'POST',
-                headers: {
-                    'x-auth-token': `laplace@${token}`
-                },
+                headers: getAuthHeaders(),
                 body: data
             });
             const response = await res.json();
