@@ -1,6 +1,4 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind utilities are loaded via the Play CDN script in index.html. */
 
 /* Custom Scrollbar */
 ::-webkit-scrollbar {

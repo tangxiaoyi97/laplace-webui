@@ -4,5 +4,27 @@
   "private": true,
   "type": "module",
   "description": "Official WebUI plugin for laplace-core.",
-  "license": "MIT"
+  "author": "Tangxiaoyi97",
+  "license": "MIT",
+  "scripts": {
+    "build": "npm run build:ui && npm run build:plugin",
+    "build:ui": "vite build",
+    "build:plugin": "node build.mjs",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "lucide-react": "^0.564.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "esbuild": "^0.28.0",
+    "express": "^5.2.1",
+    "typescript": "~5.8.2",
+    "vite": "^8.0.8"
+  }
 }

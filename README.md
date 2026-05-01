@@ -4,35 +4,56 @@
 
 This repository is intentionally separate from the core runtime:
 - `laplace-core` contains the backend, TUI, and plugin runtime
-- `laplace-webui` contains only the WebUI plugin
+- `laplace-webui` contains only the WebUI plugin (built into a self-contained bundle)
 
-## Install
+## Install (end-user)
 
-Clone this repository directly into the external plugin directory used by `laplace-core`:
+Inside the `laplace-core` TUI:
 
-```bash
-git clone --branch feature --single-branch https://github.com/tangxiaoyi97/laplace-webui.git laplace_data/plugins/webui
+```
+plugin install webui
 ```
 
-Required runtime layout after install:
+That's it. Restart `laplace-core` and the WebUI is live. The installer fetches the latest release zip from GitHub and extracts it into `laplace_data/plugins/webui/`.
+
+Manual drop-in is also supported: grab the release zip from the [Releases page](https://github.com/tangxiaoyi97/laplace-webui/releases) and unzip it into `laplace_data/plugins/webui/`.
+
+## Released layout
 
 ```text
 laplace_data/plugins/webui/
   laplace.plugin.json
-  index.ts
-  plugin-api.ts
-  ui/
+  dist/
+    index.js          # bundled plugin entry (esbuild)
+    ui/               # bundled React frontend (Vite)
+      index.html
+      assets/...
 ```
 
-## Start Flow
+The plugin folder is fully self-contained — no `npm install`, no source files, no build step required at the install site.
 
-`webui` does not run as a separate process.
+## Develop
 
-To use it:
-1. Install this repository into `laplace_data/plugins/webui`
-2. Start `laplace-core` in standard mode: `npm run start`
+```bash
+git clone -b feature https://github.com/tangxiaoyi97/laplace-webui.git
+cd laplace-webui
+npm install
+npm run build
+```
 
-If you start `laplace-core` in clean mode (`npm run start:clean`), `webui` will not be loaded.
+Symlink the built directory into `laplace-core/laplace_data/plugins/webui` (or place it there directly), then start `laplace-core` in standard mode.
+
+For iterative UI development, run `npm run build:ui -- --watch` to rebuild the frontend on save.
+
+### Build outputs
+
+- `npm run build:ui`    → Vite builds `ui/` into `dist/ui/`
+- `npm run build:plugin` → esbuild bundles `index.ts` into `dist/index.js`
+- `npm run build`       → both
+
+## Release
+
+Tagged pushes (`v*`) trigger `.github/workflows/release.yml`, which builds and publishes a `laplace-webui-<tag>.zip` to the GitHub Releases page. That zip is what `plugin install webui` downloads.
 
 ## Compatibility
 
