@@ -10,6 +10,15 @@ export interface TuiInterface {
   log(msg: string, color?: string): void;
 }
 
+export interface ServiceRegistryHandle {
+  register<T>(name: string, service: T): () => void;
+  unregister(name: string): void;
+  get<T = unknown>(name: string): T | null;
+  has(name: string): boolean;
+  listen<T = unknown>(name: string, callback: (service: T) => void): () => void;
+  list(): string[];
+}
+
 export interface PluginRuntimeContext {
   pluginId: string;
   pluginRoot: string;
@@ -28,6 +37,7 @@ export interface PluginRuntimeContext {
   mountStatic: (mountPath: string, directory: string, options?: { index?: boolean; maxAge?: number }) => void;
   registerCommand: (command: string, description: string, handler: (args: string[]) => Promise<void> | void) => void;
   addHeaderInfo: (label: string, value: string) => void;
+  services: ServiceRegistryHandle;
 }
 
 export interface LaplacePlugin {

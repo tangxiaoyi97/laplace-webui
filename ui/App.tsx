@@ -1,15 +1,44 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { LayoutDashboard, FolderOpen, Users, Server, LogOut, Terminal, FileText, XCircle, CheckCircle, AlertCircle, Settings, Archive } from 'lucide-react';
-import Dashboard from './components/Dashboard.tsx';
-import ServerWizard from './components/ServerWizard.tsx';
-import FileManager from './components/FileManager.tsx';
-import PlayerManager from './components/PlayerManager.tsx';
-import LogsView from './components/LogsView.tsx';
-import ServerSettings from './components/ServerSettings.tsx';
-import BackupManager from './components/BackupManager.tsx';
+import {
+    LayoutDashboard, LogOut, Terminal, XCircle, CheckCircle, AlertCircle, ChevronRight,
+    ChevronDown, Plus, ServerCog, FolderOpen, Users, FileText, Archive, CalendarClock,
+    Settings, Server, Puzzle, Box, BarChart, BarChart2, BarChart3, Bell, Bookmark,
+    Calendar, Clock, Cloud, Code, Cpu, Database, Download, Edit, Eye, Filter, Flag,
+    Gauge, Gift, Globe, Hash, Heart, Home, Image, Info, Key, Layers, Layout, Link as LinkIcon,
+    List, Lock, Mail, MapPin, Menu, MessageSquare, Mic, Monitor, Moon, Music, Package,
+    PenTool, Phone, PieChart, Play, Power, Radio, Rocket, RotateCw, Save, Search, Send,
+    Share, Shield, ShoppingCart, Slash, Smile, Star, Sun, Tag, Target, Trash2, TrendingUp,
+    Upload, User, Video, Wifi, Wrench, Zap,
+} from 'lucide-react';
+
+// Known icons: anything a plugin can name. If a plugin requests an icon not in
+// this set, the shell falls back to Box. Adding entries is the right way to
+// extend the palette — a wildcard `import * as Lucide` would defeat tree
+// shaking and bloat the bundle by ~700kb.
+const ICON_REGISTRY: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
+    LayoutDashboard, LogOut, Terminal, XCircle, CheckCircle, AlertCircle, ChevronRight,
+    ChevronDown, Plus, ServerCog, FolderOpen, Users, FileText, Archive, CalendarClock,
+    Settings, Server, Puzzle, Box, BarChart, BarChart2, BarChart3, Bell, Bookmark,
+    Calendar, Clock, Cloud, Code, Cpu, Database, Download, Edit, Eye, Filter, Flag,
+    Gauge, Gift, Globe, Hash, Heart, Home, Image, Info, Key, Layers, Layout, Link: LinkIcon,
+    List, Lock, Mail, MapPin, Menu, MessageSquare, Mic, Monitor, Moon, Music, Package,
+    PenTool, Phone, PieChart, Play, Power, Radio, Rocket, RotateCw, Save, Search, Send,
+    Share, Shield, ShoppingCart, Slash, Smile, Star, Sun, Tag, Target, Trash2, TrendingUp,
+    Upload, User, Video, Wifi, Wrench, Zap,
+};
 import PublicHome from './components/PublicHome.tsx';
 import { ViewState } from './types.ts';
-import { clearStoredToken, fetchAuthed, getStoredToken, setStoredToken } from './lib/api.ts';
+import type { ServerSummary } from './types.ts';
+import {
+    checkToken, clearStoredToken, fetchAuthed, getStoredToken,
+    normalizeTokenInput, postScoped, setStoredToken,
+} from './lib/api.ts';
+import { Button, Card, Eyebrow } from './components/primitives.tsx';
+import { BUILTIN_SECTIONS } from './sections/builtin.ts';
+import { PluginSection } from './sections/PluginSection.tsx';
+import { PluginsOverview } from './sections/PluginsOverview.tsx';
+import type { SectionDescriptor, SidebarGroup, SectionProps } from './sections/types.ts';
+import { applyStylesheets, subscribeExtensions, type ExtensionsManifest, type SectionRegistration } from './lib/extensions.ts';
 
 interface Toast {
     id: number;
@@ -17,236 +46,538 @@ interface Toast {
     type: 'success' | 'error' | 'info';
 }
 
+/** Normalize legacy ViewState constants ('DASHBOARD') to section ids ('dashboard'). */
+function normalizeView(view: string): string {
+    const map: Record<string, string> = {
+        DASHBOARD: 'dashboard',
+        SERVERS_OVERVIEW: 'servers',
+        SERVER_WIZARD: 'server-wizard',
+        FILES: 'files',
+        PLAYERS: 'players',
+        LOGS: 'logs',
+        SETTINGS: 'settings',
+        BACKUPS: 'backups',
+        BACKUP_SCHEDULE: 'backup-schedule',
+    };
+    return map[view] || view;
+}
+
+const GROUP_ORDER: SidebarGroup[] = ['overview', 'operations', 'snapshots', 'configuration', 'plugin'];
+const GROUP_LABEL: Record<SidebarGroup, string> = {
+    overview: 'Overview',
+    operations: 'Operations',
+    snapshots: 'Snapshots',
+    configuration: 'Configuration',
+    plugin: 'Plugins',
+};
+
+function resolveLucideIcon(name: string | undefined): React.ComponentType<{ size?: number; className?: string }> {
+    if (!name) return Box;
+    return ICON_REGISTRY[name] || Box;
+}
+
 export default function App() {
-  const [currentPath, setCurrentPath] = useState(window.location.pathname);
+    const [currentPath, setCurrentPath] = useState(window.location.pathname);
 
-  useEffect(() => {
-      const handlePopState = () => setCurrentPath(window.location.pathname);
-      window.addEventListener('popstate', handlePopState);
-      return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+    useEffect(() => {
+        const handlePopState = () => setCurrentPath(window.location.pathname);
+        window.addEventListener('popstate', handlePopState);
+        return () => window.removeEventListener('popstate', handlePopState);
+    }, []);
 
-  if (currentPath === '/' || currentPath === '/index') return <PublicHome />;
-  if (currentPath.startsWith('/dashboard')) return <AdminPanel />;
-  return <PublicHome />;
+    if (currentPath === '/' || currentPath === '/index') return <PublicHome />;
+    if (currentPath.startsWith('/dashboard')) return <AdminPanel />;
+    return <PublicHome />;
 }
 
 function AdminPanel() {
-  const [view, setView] = useState<ViewState>(ViewState.DASHBOARD);
-  const [auth, setAuth] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [hasServer, setHasServer] = useState(false);
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const [tokenInput, setTokenInput] = useState('');
+    const [view, setViewRaw] = useState<string>('dashboard');
+    const setView = useCallback((next: string) => setViewRaw(normalizeView(next)), []);
+    const [auth, setAuth] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [servers, setServers] = useState<ServerSummary[]>([]);
+    const [serversLoaded, setServersLoaded] = useState(false);
+    const [currentServerId, setCurrentServerId] = useState<string | null>(null);
+    const [defaultServerId, setDefaultServerId] = useState<string | null>(null);
+    const [pickerOpen, setPickerOpen] = useState(false);
+    const [panelVersion, setPanelVersion] = useState<string | null>(null);
+    const [gitCommit, setGitCommit] = useState<string | null>(null);
+    const [extensions, setExtensions] = useState<ExtensionsManifest>({ sections: [], tiles: [], stylesheets: [], revision: 0 });
+    const pickerRef = React.useRef<HTMLDivElement>(null);
+    const [toasts, setToasts] = useState<Toast[]>([]);
+    const [tokenInput, setTokenInput] = useState('');
+    const [tokenError, setTokenError] = useState('');
+    const [verifying, setVerifying] = useState(false);
 
-  const notify = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
-      const id = Date.now();
-      setToasts(prev => [...prev, { id, message, type }]);
-      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
-  }, []);
+    const notify = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
+        const id = Date.now() + Math.random();
+        setToasts((prev) => [...prev, { id, message, type }]);
+        setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+    }, []);
 
-  const readTokenFromLocation = (): string | null => {
-      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-      return hashParams.get('token');
-  };
+    useEffect(() => {
+        const urlToken = (() => {
+            const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+            return hashParams.get('token');
+        })();
+        const fromUrl = urlToken ? normalizeTokenInput(urlToken) : '';
+        if (fromUrl) {
+            setStoredToken(fromUrl);
+            window.history.replaceState({}, '', '/dashboard');
+        }
+        const stored = getStoredToken();
+        if (!stored) { setLoading(false); return; }
+        checkToken(stored)
+            .then((result) => {
+                if (result.ok) setAuth(true);
+                else clearStoredToken();
+            })
+            .finally(() => setLoading(false));
+    }, []);
 
-  // 1. Initial Token Check
-  useEffect(() => {
-    const urlToken = readTokenFromLocation();
-    
-    if (urlToken) {
-      setStoredToken(urlToken);
-      window.history.replaceState({}, '', '/dashboard');
+    // Server inventory polling
+    useEffect(() => {
+        if (!auth) return;
+        let cancelled = false;
+        const refresh = async () => {
+            try {
+                const res = await fetchAuthed('/servers');
+                if (!res.ok) return;
+                const json = await res.json();
+                if (cancelled || !json.success) return;
+                const list: ServerSummary[] = json.data.servers || [];
+                setServers(list);
+                setServersLoaded(true);
+                setDefaultServerId(json.data.activeServer ?? null);
+                setCurrentServerId((prev) => {
+                    if (prev && list.some((s) => s.id === prev)) return prev;
+                    if (json.data.activeServer && list.some((s) => s.id === json.data.activeServer)) return json.data.activeServer;
+                    return list[0]?.id ?? null;
+                });
+            } catch { /* network blip */ }
+        };
+        refresh();
+        const interval = setInterval(refresh, 5000);
+        return () => { cancelled = true; clearInterval(interval); };
+    }, [auth]);
+
+    // Build/version banner
+    useEffect(() => {
+        if (!auth) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await fetch('/api/health');
+                if (!res.ok) return;
+                const json = await res.json();
+                if (cancelled) return;
+                if (typeof json?.panelVersion === 'string') setPanelVersion(json.panelVersion);
+                if (typeof json?.gitCommit === 'string' || json?.gitCommit === null) setGitCommit(json.gitCommit);
+            } catch { /* not fatal */ }
+        })();
+        return () => { cancelled = true; };
+    }, [auth]);
+
+    // Plugin extensions: subscribe + apply stylesheets
+    useEffect(() => {
+        if (!auth) return;
+        const stop = subscribeExtensions((manifest) => {
+            setExtensions(manifest);
+            applyStylesheets(manifest.stylesheets);
+        });
+        return () => {
+            stop();
+            // Strip injected stylesheets on logout/unmount.
+            applyStylesheets([]);
+        };
+    }, [auth]);
+
+    // Picker click-outside / Esc handling
+    useEffect(() => {
+        if (!pickerOpen) return;
+        const handler = (e: MouseEvent) => {
+            if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setPickerOpen(false);
+        };
+        const escHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') setPickerOpen(false); };
+        document.addEventListener('mousedown', handler);
+        document.addEventListener('keydown', escHandler);
+        return () => {
+            document.removeEventListener('mousedown', handler);
+            document.removeEventListener('keydown', escHandler);
+        };
+    }, [pickerOpen]);
+
+    const cleanupAuth = () => {
+        clearStoredToken();
+        setAuth(false);
+        setTokenInput('');
+        setTokenError('');
+    };
+
+    const handleTokenSubmit = async (event?: React.FormEvent) => {
+        event?.preventDefault();
+        if (verifying) return;
+        const cleaned = normalizeTokenInput(tokenInput);
+        if (!cleaned) { setTokenError('Token is required.'); return; }
+        setVerifying(true);
+        setTokenError('');
+        const result = await checkToken(cleaned);
+        setVerifying(false);
+        if (result.ok) {
+            setStoredToken(cleaned);
+            setAuth(true);
+            setTokenInput('');
+        } else {
+            setTokenError(result.message);
+        }
+    };
+
+    const handleLogout = () => {
+        cleanupAuth();
+        window.location.href = '/';
+    };
+
+    const switchServer = useCallback(async (id: string) => {
+        if (!servers.some((s) => s.id === id)) {
+            notify('That server is no longer configured.', 'error');
+            return;
+        }
+        setCurrentServerId(id);
+        setPickerOpen(false);
+        try {
+            await postScoped('/servers/select', null, { serverId: id });
+            setDefaultServerId(id);
+        } catch { /* non-fatal */ }
+    }, [notify, servers]);
+
+    const refreshServers = useCallback(async () => {
+        try {
+            const res = await fetchAuthed('/servers');
+            const json = await res.json();
+            if (json.success) {
+                const list: ServerSummary[] = json.data.servers || [];
+                setServers(list);
+                setServersLoaded(true);
+                setDefaultServerId(json.data.activeServer ?? null);
+                setCurrentServerId((prev) => {
+                    if (prev && list.some((s) => s.id === prev)) return prev;
+                    if (json.data.activeServer && list.some((s) => s.id === json.data.activeServer)) return json.data.activeServer;
+                    return list[0]?.id ?? null;
+                });
+            }
+        } catch { /* ignore */ }
+    }, []);
+
+    const handleServerDeleted = useCallback(async (deletedId: string) => {
+        setCurrentServerId((prev) => (prev === deletedId ? null : prev));
+        await refreshServers();
+    }, [refreshServers]);
+
+    if (loading) {
+        return (
+            <div className="h-screen flex items-center justify-center bg-[color:var(--color-canvas)]">
+                <div className="w-6 h-6 rounded-full border-2 border-[color:var(--color-primary)] border-r-transparent animate-spin" />
+            </div>
+        );
     }
 
-    const storedToken = getStoredToken();
-    if (storedToken) {
-        verifyToken();
-    } else {
-        setLoading(false);
+    if (!auth) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-[color:var(--color-canvas)] px-4">
+                <div className="w-full max-w-[440px]">
+                    <Eyebrow className="mb-4">Restricted access</Eyebrow>
+                    <h1 className="display-lg mb-3">Sign in to your<br />control panel.</h1>
+                    <p className="text-[15px] text-[color:var(--color-body)] mb-8 max-w-md">
+                        Use the admin token printed in your <span className="font-mono text-[13px]">laplace-core</span> console on first launch — or rotate one from the TUI with <span className="font-mono text-[13px]">user token</span>.
+                    </p>
+                    <Card tone="canvas" padded className="mb-4">
+                        <form onSubmit={handleTokenSubmit} noValidate>
+                            <label className="block">
+                                <span className="block text-[12px] font-medium text-[color:var(--color-ink)] mb-2">Admin token</span>
+                                <input
+                                    type="password"
+                                    value={tokenInput}
+                                    onChange={(e) => { setTokenInput(e.target.value); if (tokenError) setTokenError(''); }}
+                                    placeholder="Paste admin token"
+                                    aria-invalid={Boolean(tokenError)}
+                                    className={`w-full h-10 px-3 rounded-md bg-[color:var(--color-canvas)] border text-[14px] text-[color:var(--color-ink)] ${
+                                        tokenError ? 'border-[color:var(--color-error)]' : 'border-[color:var(--color-hairline)]'
+                                    }`}
+                                    autoFocus
+                                />
+                            </label>
+                            {tokenError ? (
+                                <div className="mt-2 text-[12px] text-[color:var(--color-error)] leading-snug" role="alert">{tokenError}</div>
+                            ) : null}
+                            <Button type="submit" className="w-full mt-4" loading={verifying} disabled={verifying}>
+                                {verifying ? 'Verifying…' : 'Continue'}
+                            </Button>
+                        </form>
+                    </Card>
+                    <button
+                        onClick={() => (window.location.href = '/')}
+                        className="text-[13px] text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)] inline-flex items-center gap-1"
+                    >
+                        Return to public page <ChevronRight size={14} />
+                    </button>
+                </div>
+            </div>
+        );
     }
-  }, []);
 
-  // 2. Server Status Polling
-  useEffect(() => {
-      if (!auth) return;
+    const currentServer = servers.find((s) => s.id === currentServerId) || null;
 
-      checkServerStatus();
+    // Merge built-in sections with plugin-supplied ones from the manifest.
+    // Plugin sections come in as iframe descriptors; convert to SectionDescriptor.
+    const pluginSections: SectionDescriptor[] = extensions.sections.map((reg: SectionRegistration) => ({
+        id: reg.id,
+        label: reg.label,
+        group: (reg.group as SidebarGroup) || 'plugin',
+        icon: reg.icon || 'Puzzle',
+        order: reg.order ?? 200,
+        scope: reg.serverScoped ? 'server' : 'global',
+        iframeUrl: reg.iframeUrl,
+        iframeHeight: reg.height,
+        serverScoped: reg.serverScoped,
+        pluginId: reg.pluginId,
+    }));
 
-      const interval = setInterval(() => {
-          checkServerStatus();
-      }, 10000);
+    // Synthetic Plugins overview section (always available when there are extensions
+    // or stylesheets of any kind, to avoid clutter in clean installs).
+    const hasAnyExtensions = pluginSections.length > 0 || extensions.tiles.length > 0 || extensions.stylesheets.length > 0;
+    const pluginsOverviewSection: SectionDescriptor | null = hasAnyExtensions ? {
+        id: 'plugins-overview',
+        label: 'Plugin tiles',
+        group: 'plugin',
+        icon: 'Puzzle',
+        order: 0,
+        scope: 'global',
+    } : null;
 
-      return () => clearInterval(interval);
-  }, [auth]);
+    const allSections: SectionDescriptor[] = [
+        ...BUILTIN_SECTIONS,
+        ...(pluginsOverviewSection ? [pluginsOverviewSection] : []),
+        ...pluginSections,
+    ];
 
-  const verifyToken = async () => {
-      try {
-          const res = await fetchAuthed('/auth/check');
-          
-          if (res.ok) {
-              setAuth(true);
-          } else {
-              cleanupAuth();
-          }
-      } catch (e) { 
-          console.error("Auth check failed", e);
-          cleanupAuth();
-      } finally {
-          setLoading(false);
-      }
-  };
+    // Group + sort for the sidebar.
+    const grouped: Record<SidebarGroup, SectionDescriptor[]> = {
+        overview: [], operations: [], snapshots: [], configuration: [], plugin: [],
+    };
+    for (const s of allSections) {
+        const g = grouped[s.group] || (grouped.plugin);
+        g.push(s);
+    }
+    for (const key of Object.keys(grouped) as SidebarGroup[]) {
+        grouped[key].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+    }
 
-  const cleanupAuth = () => {
-      clearStoredToken();
-      setAuth(false);
-      setTokenInput('');
-  };
+    const activeSection = allSections.find((s) => s.id === view) || BUILTIN_SECTIONS[0];
 
-  const checkServerStatus = async () => {
-      try {
-          const res = await fetchAuthed('/server/status');
-          const response = await res.json();
-          if (response.success && response.data) {
-              const active = !!response.data.activeServerId;
-              setHasServer(active);
-              if (!active && view !== ViewState.DASHBOARD && view !== ViewState.SERVER_WIZARD) {
-                  setView(ViewState.DASHBOARD);
-              }
-          }
-      } catch (e) { }
-  }
+    const renderActive = () => {
+        const baseProps: SectionProps = {
+            notify,
+            currentServerId,
+            currentServer,
+            servers,
+            defaultServerId,
+            refreshServers,
+            switchServer,
+            handleServerDeleted,
+            setView,
+        };
 
-  const handleLogout = () => {
-    cleanupAuth();
-    window.location.href='/';
-  };
+        if (activeSection.id === 'plugins-overview') {
+            return <PluginsOverview tiles={extensions.tiles.filter((t) => (t.placement || 'plugins-overview') === 'plugins-overview')} sectionsCount={pluginSections.length} stylesheetsCount={extensions.stylesheets.length} />;
+        }
 
-  if (loading) return (
-    <div className="h-screen flex items-center justify-center bg-laplace-bg">
-       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-laplace-primary"></div>
-    </div>
-  );
+        if (activeSection.iframeUrl) {
+            return <PluginSection descriptor={activeSection} {...baseProps} />;
+        }
 
-  if (!auth) {
-      return (
-          <div className="h-screen flex flex-col items-center justify-center bg-laplace-bg p-4 relative overflow-hidden">
-              <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-laplace-primary/5 rounded-full blur-3xl"></div>
-              <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-blue-500/5 rounded-full blur-3xl"></div>
-
-              <div className="w-20 h-20 bg-white rounded-3xl flex items-center justify-center text-laplace-primary mb-6 shadow-soft z-10">
-                  <Terminal size={40} />
-              </div>
-              <h1 className="text-3xl font-black text-laplace-darker mb-2 z-10">Access Restricted</h1>
-              <p className="text-gray-400 text-center max-w-sm mb-6 z-10">Security Checkpoint. Use the token provided in your server console.</p>
-              <div className="w-full max-w-md bg-white border border-gray-200 rounded-2xl p-4 mb-4 z-10 shadow-soft">
-                  <input
-                    type="password"
-                    value={tokenInput}
-                    onChange={(e) => setTokenInput(e.target.value.trim())}
-                    placeholder="Paste admin token"
-                    className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:border-laplace-primary text-sm"
-                  />
-                  <button
-                    onClick={async () => {
-                      if (!tokenInput) return;
-                      setStoredToken(tokenInput);
-                      await verifyToken();
-                    }}
-                    className="w-full mt-3 px-4 py-2 rounded-xl bg-laplace-primary text-white text-sm font-bold hover:bg-opacity-90 transition-all"
-                  >
-                    Verify Token
-                  </button>
-              </div>
-              <button onClick={() => window.location.href = '/'} className="px-6 py-2 rounded-xl bg-white border border-gray-200 text-sm font-bold text-gray-600 hover:text-laplace-primary hover:border-laplace-primary/30 transition-all z-10">
-                  Return Home
-              </button>
-          </div>
-      );
-  }
-
-  const NavItem = ({ v, icon: Icon, label, disabled }: any) => (
-      <button 
-        onClick={() => !disabled && setView(v)}
-        disabled={disabled}
-        className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 group
-            ${view === v 
-                ? 'bg-laplace-primary text-white shadow-lg shadow-laplace-primary/30' 
-                : 'text-gray-500 hover:bg-white hover:shadow-soft hover:text-laplace-darker'}
-            ${disabled ? 'opacity-50 cursor-not-allowed grayscale' : ''}
-        `}
-      >
-          <Icon size={20} className={view === v ? 'text-white' : 'text-gray-400 group-hover:text-laplace-primary transition-colors'} />
-          <span className="font-semibold text-sm tracking-tight">{label}</span>
-      </button>
-  );
-
-  const renderView = () => {
-      const props = { notify };
-      switch (view) {
-          case ViewState.DASHBOARD: return <Dashboard onNavigate={setView} {...props} />;
-          case ViewState.SERVER_WIZARD: return <ServerWizard onViewChange={(v) => { setHasServer(true); setView(v); }} {...props} />;
-          case ViewState.FILES: return <FileManager {...props} />;
-          case ViewState.PLAYERS: return <PlayerManager {...props} />;
-          case ViewState.LOGS: return <LogsView {...props} />;
-          case ViewState.SETTINGS: return <ServerSettings {...props} />;
-          case ViewState.BACKUPS: return <BackupManager {...props} />;
-          default: return <Dashboard onNavigate={setView} {...props} />;
-      }
-  };
-
-  return (
-    <div className="flex h-screen bg-laplace-bg p-2 sm:p-4 overflow-hidden relative font-sans">
-        <div className="fixed top-6 right-6 z-50 flex flex-col space-y-3 pointer-events-none">
-            {toasts.map(toast => (
-                <div key={toast.id} className="pointer-events-auto flex items-center space-x-3 bg-white px-4 py-3 rounded-xl shadow-xl shadow-gray-200/50 border border-gray-100 animate-fade-in min-w-[300px]">
-                    {toast.type === 'success' && <div className="p-1 rounded-full bg-green-100 text-green-600"><CheckCircle size={16} /></div>}
-                    {toast.type === 'error' && <div className="p-1 rounded-full bg-red-100 text-red-600"><XCircle size={16} /></div>}
-                    {toast.type === 'info' && <div className="p-1 rounded-full bg-blue-100 text-blue-600"><AlertCircle size={16} /></div>}
-                    <span className="text-sm font-semibold text-gray-700">{toast.message}</span>
-                </div>
-            ))}
-        </div>
-
-        <div className="w-64 flex flex-col pr-4 hidden md:flex">
-            <div className="px-4 py-6 mb-4">
-                <div className="flex items-center space-x-3 text-laplace-darker">
-                    <div className="w-10 h-10 bg-gradient-to-br from-laplace-darker to-gray-800 text-white rounded-xl flex items-center justify-center shadow-lg shadow-gray-900/20">
-                        <Terminal size={20} />
+        // Special-case "Dashboard when no servers" → wizard.
+        if (activeSection.id === 'dashboard') {
+            if (!serversLoaded) {
+                return (
+                    <div className="flex items-center justify-center py-24">
+                        <div className="w-5 h-5 rounded-full border-2 border-[color:var(--color-primary)] border-r-transparent animate-spin" />
                     </div>
-                    <div>
-                        <h1 className="font-black text-lg leading-tight tracking-tight">Laplace</h1>
-                        <p className="text-[10px] text-gray-400 font-mono bg-gray-200/50 px-1.5 py-0.5 rounded-md inline-block mt-1">v15.2</p>
+                );
+            }
+            if (servers.length === 0) {
+                const wiz = BUILTIN_SECTIONS.find((s) => s.id === 'server-wizard');
+                if (wiz?.component) {
+                    const Wiz = wiz.component;
+                    return <Wiz {...baseProps} />;
+                }
+            }
+        }
+
+        if (!activeSection.component) return null;
+        const Comp = activeSection.component;
+        return <Comp {...baseProps} />;
+    };
+
+    return (
+        <div className="min-h-screen flex bg-[color:var(--color-canvas)] text-[color:var(--color-body)]">
+            <div className="fixed top-6 right-6 z-50 flex flex-col gap-3 pointer-events-none">
+                {toasts.map((toast) => (
+                    <div key={toast.id} className="pointer-events-auto flex items-center gap-3 bg-[color:var(--color-canvas)] border border-[color:var(--color-hairline)] px-4 py-3 rounded-lg animate-fade-in min-w-[280px]">
+                        {toast.type === 'success' && <CheckCircle size={16} className="text-[color:var(--color-success)]" />}
+                        {toast.type === 'error' && <XCircle size={16} className="text-[color:var(--color-error)]" />}
+                        {toast.type === 'info' && <AlertCircle size={16} className="text-[color:var(--color-accent-sage)]" />}
+                        <span className="text-[13px] text-[color:var(--color-ink)]">{toast.message}</span>
                     </div>
-                </div>
+                ))}
             </div>
 
-            <nav className="flex-1 space-y-1.5">
-                <NavItem v={ViewState.DASHBOARD} icon={LayoutDashboard} label="Dashboard" />
-                <div className="pt-4 pb-2 px-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Management</div>
-                <NavItem v={ViewState.FILES} icon={FolderOpen} label="File System" disabled={!hasServer} />
-                <NavItem v={ViewState.PLAYERS} icon={Users} label="Player Base" disabled={!hasServer} />
-                <div className="pt-4 pb-2 px-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">System</div>
-                <NavItem v={ViewState.BACKUPS} icon={Archive} label="Snapshots" disabled={!hasServer} />
-                <NavItem v={ViewState.LOGS} icon={FileText} label="Console Logs" disabled={!hasServer} />
-                <NavItem v={ViewState.SETTINGS} icon={Settings} label="Configuration" disabled={!hasServer} />
-                {!hasServer && <NavItem v={ViewState.SERVER_WIZARD} icon={Server} label="Setup Wizard" />}
-            </nav>
+            <aside className="w-[260px] hidden md:flex flex-col border-r border-[color:var(--color-hairline)] bg-[color:var(--color-canvas)]">
+                <div className="px-7 pt-9 pb-5">
+                    <div className="font-display text-[26px] tracking-[-0.6px] text-[color:var(--color-ink)] leading-none">laplace</div>
+                    <div className="eyebrow mt-2">Control panel</div>
+                </div>
 
-            <div className="mt-auto pt-4 border-t border-laplace-border">
-                <button 
-                    onClick={handleLogout} 
-                    className="w-full flex items-center space-x-3 px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl transition-colors group"
-                >
-                    <LogOut size={20} className="group-hover:-translate-x-1 transition-transform" />
-                    <span className="font-bold text-sm">Disconnect</span>
-                </button>
+                {/* Server picker */}
+                <div className="px-4 pb-4 relative" ref={pickerRef}>
+                    <button
+                        onClick={() => setPickerOpen((v) => !v)}
+                        className={`w-full flex items-center gap-3 px-4 py-3 rounded-md bg-[color:var(--color-surface-soft)] border border-[color:var(--color-hairline)] transition-colors text-left ${
+                            servers.length === 0 ? 'opacity-60 cursor-not-allowed' : 'hover:bg-[color:var(--color-surface-card)]'
+                        }`}
+                        aria-haspopup="listbox"
+                        aria-expanded={pickerOpen}
+                        title={servers.length === 0 ? 'No servers configured yet — run the setup wizard' : undefined}
+                        disabled={servers.length === 0}
+                    >
+                        <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{
+                            background: currentServer?.status === 'ONLINE' ? 'var(--color-success)'
+                                : currentServer?.status === 'CRASHED' ? 'var(--color-error)'
+                                : currentServer?.running ? 'var(--color-accent-ochre)'
+                                : 'var(--color-muted-soft)',
+                        }} />
+                        <div className="flex-1 min-w-0">
+                            <div className="text-[13px] font-medium text-[color:var(--color-ink)] truncate">
+                                {currentServer?.name || (servers.length === 0 ? 'No servers yet' : 'Select a server')}
+                            </div>
+                            <div className="text-[11px] text-[color:var(--color-muted)] truncate">
+                                {currentServer ? `${currentServer.id} · ${currentServer.status.toLowerCase()}` : 'Run the wizard to add one'}
+                            </div>
+                        </div>
+                        <ChevronDown size={14} className={`text-[color:var(--color-muted)] transition-transform ${pickerOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {pickerOpen && servers.length > 0 ? (
+                        <div className="absolute left-4 right-4 top-full mt-1 z-30 bg-[color:var(--color-canvas)] border border-[color:var(--color-hairline)] rounded-md shadow-lg max-h-[300px] overflow-auto" role="listbox">
+                            {servers.map((s) => (
+                                <button
+                                    key={s.id}
+                                    onClick={() => switchServer(s.id)}
+                                    className={`w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-[color:var(--color-surface-soft)] transition-colors ${
+                                        s.id === currentServerId ? 'bg-[color:var(--color-surface-card)]' : ''
+                                    }`}
+                                >
+                                    <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{
+                                        background: s.status === 'ONLINE' ? 'var(--color-success)'
+                                            : s.status === 'CRASHED' ? 'var(--color-error)'
+                                            : s.running ? 'var(--color-accent-ochre)'
+                                            : 'var(--color-muted-soft)',
+                                    }} />
+                                    <div className="flex-1 min-w-0">
+                                        <div className="text-[13px] text-[color:var(--color-ink)] truncate">{s.name}</div>
+                                        <div className="text-[11px] text-[color:var(--color-muted)] truncate">{s.id} · port {s.port ?? '—'} · {s.status.toLowerCase()}</div>
+                                    </div>
+                                    {s.id === defaultServerId ? <span className="text-[10px] text-[color:var(--color-muted)] uppercase tracking-[1.2px]">default</span> : null}
+                                </button>
+                            ))}
+                            <button
+                                onClick={() => { setPickerOpen(false); setView('server-wizard'); }}
+                                className="w-full flex items-center gap-3 px-4 py-2.5 text-left border-t border-[color:var(--color-hairline)] hover:bg-[color:var(--color-surface-soft)] transition-colors"
+                            >
+                                <Plus size={14} className="text-[color:var(--color-primary)]" />
+                                <span className="text-[13px] text-[color:var(--color-primary)] font-medium">Add new server</span>
+                            </button>
+                        </div>
+                    ) : null}
+                </div>
+
+                <nav className="flex-1 px-4 space-y-0.5 overflow-y-auto">
+                    {GROUP_ORDER.map((group) => {
+                        const items = grouped[group];
+                        if (!items || items.length === 0) return null;
+                        return (
+                            <div key={group} className="pb-2">
+                                <div className="px-4 pt-5 pb-2 eyebrow text-[10px]">{GROUP_LABEL[group]}</div>
+                                <div className="space-y-0.5">
+                                    {items.map((s) => {
+                                        const Icon = resolveLucideIcon(s.icon);
+                                        const disabled = (s.scope === 'server' && !currentServerId)
+                                            || (s.scope === 'no-servers' && servers.length > 0);
+                                        const active = view === s.id;
+                                        return (
+                                            <button
+                                                key={s.id}
+                                                onClick={() => !disabled && setView(s.id)}
+                                                disabled={disabled}
+                                                title={s.pluginId ? `${s.pluginId} · ${s.label}` : s.label}
+                                                className={`group flex items-center gap-3 w-full h-9 px-4 rounded-md text-[13.5px] transition-colors ${
+                                                    active
+                                                        ? 'bg-[color:var(--color-surface-card)] text-[color:var(--color-ink)] font-medium'
+                                                        : 'text-[color:var(--color-body)] hover:bg-[color:var(--color-surface-soft)] hover:text-[color:var(--color-ink)]'
+                                                } ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+                                            >
+                                                <Icon size={15} className={active ? 'text-[color:var(--color-primary)]' : 'text-[color:var(--color-muted)]'} />
+                                                <span className="truncate">{s.label}</span>
+                                                {s.pluginId ? <span className="ml-auto text-[10px] text-[color:var(--color-muted-soft)] uppercase tracking-[1.2px]">ext</span> : null}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </nav>
+
+                <div className="px-4 pb-6 pt-4 border-t border-[color:var(--color-hairline)]">
+                    <button
+                        onClick={handleLogout}
+                        className="flex items-center gap-3 px-4 h-10 w-full rounded-md text-[13px] text-[color:var(--color-muted)] hover:text-[color:var(--color-error)] hover:bg-[color:var(--color-error)]/5 transition-colors"
+                    >
+                        <LogOut size={16} />
+                        Sign out
+                    </button>
+                </div>
+            </aside>
+
+            <div className="flex-1 flex flex-col min-w-0">
+                <header className="h-16 px-10 flex items-center justify-between border-b border-[color:var(--color-hairline)] bg-[color:var(--color-canvas)]">
+                    <div className="flex items-center gap-3 text-[13px] text-[color:var(--color-muted)]">
+                        <Terminal size={14} />
+                        {currentServer ? (
+                            <>
+                                <span className="text-[color:var(--color-ink)] font-medium">{currentServer.name}</span>
+                                <span>·</span>
+                                <span>{currentServer.status.toLowerCase()}</span>
+                                {currentServer.port ? <><span>·</span><span className="font-mono">:{currentServer.port}</span></> : null}
+                                <span className="text-[color:var(--color-muted-soft)] ml-2">{servers.length} server{servers.length === 1 ? '' : 's'} configured</span>
+                            </>
+                        ) : (
+                            <span>No server selected</span>
+                        )}
+                    </div>
+                    <div className="text-[11.5px] text-[color:var(--color-muted)] flex items-center gap-2 font-mono">
+                        {panelVersion ? <span>v{panelVersion}</span> : <span className="opacity-60">v?</span>}
+                        <span className="text-[color:var(--color-muted-soft)]">·</span>
+                        {gitCommit
+                            ? <span title={`Git commit ${gitCommit}`}>{gitCommit}</span>
+                            : <span className="opacity-60" title="Not running from a git checkout">no-git</span>}
+                    </div>
+                </header>
+
+                <main className="flex-1 overflow-auto px-10 py-10">
+                    <div className="max-w-[1200px] mx-auto">
+                        {renderActive()}
+                    </div>
+                </main>
             </div>
         </div>
-
-        <main className="flex-1 bg-white/60 backdrop-blur-xl rounded-[2rem] shadow-soft border border-white p-6 overflow-hidden relative flex flex-col">
-            {renderView()}
-        </main>
-    </div>
-  );
+    );
 }

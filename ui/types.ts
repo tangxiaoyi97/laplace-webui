@@ -20,6 +20,25 @@ export interface Player {
   };
 }
 
+export interface CrashPolicy {
+  maxRestarts: number;
+  restartDelayMs: number;
+  resetAfterMs: number;
+}
+
+export interface BackupSchedule {
+  enabled: boolean;
+  intervalMinutes: number;
+  retainCount: number;
+  retainAgeDays?: number;
+  namePrefix: string;
+  requireOffline: boolean;
+  stopRestartIfOnline: boolean;
+  lastRunAt?: number;
+  lastRunStatus?: 'ok' | 'skipped' | 'error';
+  lastRunMessage?: string;
+}
+
 export interface ServerConfig {
   id: string;
   name: string;
@@ -33,6 +52,8 @@ export interface ServerConfig {
   rconPassword?: string;
   autoRestart: boolean;
   created: number;
+  crashPolicy?: CrashPolicy;
+  backupSchedule?: BackupSchedule;
 }
 
 export interface ServerCreationParams {
@@ -63,12 +84,14 @@ export interface LogEntry {
 export const ViewState = {
   AUTH: 'AUTH',
   DASHBOARD: 'DASHBOARD',
+  SERVERS_OVERVIEW: 'SERVERS_OVERVIEW',
   SERVER_WIZARD: 'SERVER_WIZARD',
   FILES: 'FILES',
   PLAYERS: 'PLAYERS',
   LOGS: 'LOGS',
   SETTINGS: 'SETTINGS',
   BACKUPS: 'BACKUPS',
+  BACKUP_SCHEDULE: 'BACKUP_SCHEDULE',
 };
 
 export type ViewState = typeof ViewState[keyof typeof ViewState];
@@ -83,10 +106,27 @@ export interface ServerStatus {
     busyScopes?: string[];
 }
 
-export type WSMessage = 
-  | { type: 'LOG', payload: LogEntry }
-  | { type: 'STATUS', payload: ServerStatus }
-  | { type: 'AUTH_REQUIRED' };
+export type WSMessage =
+  | { type: 'LOG', serverId?: string, payload: LogEntry }
+  | { type: 'STATUS', serverId?: string, payload: ServerStatus }
+  | { type: 'AUTH_REQUIRED' }
+  | { type: 'BACKUP_SCHEDULE', payload: any }
+  | { type: 'ERROR', payload: { message: string } };
+
+export interface ServerSummary {
+  id: string;
+  name: string;
+  port: number | null;
+  status: ServerStatus['status'];
+  running: boolean;
+  startTime?: number;
+}
+
+export interface ServersResponse {
+  activeServer: string | null;
+  servers: ServerSummary[];
+  runningIds: string[];
+}
 
 export type PlayerActionType = 'kick' | 'ban' | 'pardon' | 'op' | 'deop' | 'whitelist_add' | 'whitelist_remove' | 'message';
 

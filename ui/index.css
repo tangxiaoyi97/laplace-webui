@@ -1,26 +1,111 @@
-/* Tailwind utilities are loaded via the Play CDN script in index.html. */
+@import "tailwindcss";
 
-/* Custom Scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #e5e7eb;
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #d1d5db;
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+/* ============================================================
+   Raspberry Design System tokens — cream + crimson + dark navy
+   ============================================================ */
+@theme {
+  --color-canvas: #faf9f5;
+  --color-surface-soft: #f5f0e8;
+  --color-surface-card: #efe9de;
+  --color-surface-strong: #e8e0d2;
+  --color-surface-dark: #181715;
+  --color-surface-dark-elevated: #252320;
+  --color-surface-dark-soft: #1f1e1b;
+
+  --color-hairline: #e6dfd8;
+  --color-hairline-soft: #ebe6df;
+
+  --color-ink: #141413;
+  --color-body-strong: #252523;
+  --color-body: #3d3d3a;
+  --color-muted: #6c6a64;
+  --color-muted-soft: #8e8b82;
+  --color-on-primary: #ffffff;
+  --color-on-dark: #faf9f5;
+  --color-on-dark-soft: #a09d96;
+
+  --color-primary: #d21f5b;
+  --color-primary-active: #a71948;
+  --color-primary-disabled: #eae0da;
+  --color-accent-sage: #7ba098;
+  --color-accent-ochre: #b8862e;
+
+  --color-success: #5c8a5e;
+  --color-warning: #b8862e;
+  --color-error: #9b2c2c;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --radius-pill: 9999px;
+  --shadow-soft: 0 1px 3px rgba(20, 20, 19, 0.08);
 }
 
-.animate-fade-in {
-  animation: fadeIn 0.2s ease-out;
+html, body, #root {
+  background: var(--color-canvas);
+  color: var(--color-body);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
+body { margin: 0; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-hairline); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-surface-strong); }
+
+.font-display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.4px;
+}
+
+/* Display headlines — same Inter as the body, but heavier and tightly tracked
+   so they still feel like headings. */
+.display-xl { font-family: var(--font-display); font-weight: 700; font-size: 56px; line-height: 1.08; letter-spacing: -1.6px; color: var(--color-ink); }
+.display-lg { font-family: var(--font-display); font-weight: 700; font-size: 38px; line-height: 1.12; letter-spacing: -1px;   color: var(--color-ink); }
+.display-md { font-family: var(--font-display); font-weight: 600; font-size: 28px; line-height: 1.18; letter-spacing: -0.6px; color: var(--color-ink); }
+.display-sm { font-family: var(--font-display); font-weight: 600; font-size: 22px; line-height: 1.25; letter-spacing: -0.3px; color: var(--color-ink); }
+
+.eyebrow {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.hairline { border-color: var(--color-hairline); }
+
+/* Card surfaces */
+.surface-cream { background: var(--color-surface-soft); }
+.surface-card  { background: var(--color-surface-card); }
+.surface-dark  { background: var(--color-surface-dark); color: var(--color-on-dark); }
+
+/* Inputs/Buttons baseline */
+input, textarea, select {
+  font-family: inherit;
+}
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(210, 31, 91, 0.18);
+}
+
+button { font-family: inherit; }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: scale(0.98); }
-  to { opacity: 1; transform: scale(1); }
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
+.animate-fade-in { animation: fadeIn 0.18s ease-out; }
