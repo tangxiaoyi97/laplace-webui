@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build plugin
+        run: npm run build
+
+      - name: Package release zip
+        run: |
+          mkdir -p _release
+          cp laplace.plugin.json _release/
+          cp -r dist _release/dist
+          [ -f LICENSE ] && cp LICENSE _release/ || true
+          [ -f README.md ] && cp README.md _release/ || true
+          cd _release
+          zip -r ../laplace-webui-${{ github.ref_name }}.zip .
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: laplace-webui-${{ github.ref_name }}.zip
+          generate_release_notes: true

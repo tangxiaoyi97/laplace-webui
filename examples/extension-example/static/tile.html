@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/api/webui/tokens.css" />
+    <style>
+      body { margin: 0; padding: 16px; display: flex; flex-direction: column; justify-content: center; }
+      .label { font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--color-muted); }
+      .clock { font-family: var(--font-mono); font-size: 32px; color: var(--color-ink); margin-top: 6px; letter-spacing: -1px; }
+      .hint { font-size: 12px; color: var(--color-muted); margin-top: 4px; }
+    </style>
+  </head>
+  <body>
+    <div class="label">Plugin tile · live</div>
+    <div class="clock" id="clock">—</div>
+    <div class="hint">Updates every second from inside the iframe.</div>
+    <script>
+      const el = document.getElementById('clock');
+      const tick = () => {
+        const d = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        el.textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      };
+      tick();
+      setInterval(tick, 1000);
+    </script>
+  </body>
+</html>
