@@ -1,55 +1,47 @@
 import React, { useState } from 'react';
-import { Upload, FileText, Settings as SettingsIcon, Tag, Check, ArrowRight, ArrowLeft, Loader2, Info, AlertCircle } from 'lucide-react';
+import { Upload, Check, ArrowRight, ArrowLeft, AlertCircle } from 'lucide-react';
 import { ViewState } from '../types.ts';
-import { getAuthHeaders } from '../lib/api.ts';
+import { fetchAuthed } from '../lib/api.ts';
+import { Button, Card, Eyebrow, Input } from './primitives.tsx';
 
 interface Props {
-  onViewChange: (view: ViewState) => void;
-  notify?: (msg: string, type: 'success' | 'error' | 'info') => void;
+    onViewChange: (view: ViewState) => void;
+    notify?: (msg: string, type: 'success' | 'error' | 'info') => void;
+    currentServerId?: string | null;
+    refreshServers?: () => Promise<void> | void;
 }
 
-const Steps = [
-  { id: 1, title: 'Upload Core', icon: Upload },
-  { id: 2, title: 'EULA', icon: FileText },
-  { id: 3, title: 'Configuration', icon: SettingsIcon },
-  { id: 4, title: 'Identity', icon: Tag },
-];
+const STEPS = ['Pick a core', 'Accept EULA', 'Configure', 'Name'];
 
-export default function ServerWizard({ onViewChange, notify }: Props) {
-  const [step, setStep] = useState(1);
-  const [submitting, setSubmitting] = useState(false);
-  const [nameError, setNameError] = useState('');
-  const [formData, setFormData] = useState({
-    file: null as File | null,
-    eulaAccepted: false,
-    xmx: '4G',
-    xms: '1G',
-    port: '25565',
-    maxPlayers: '20',
-    motd: 'A Minecraft Server',
-    serverName: 'newserver',
-  });
+export default function ServerWizard({ onViewChange, notify, refreshServers }: Props) {
+    const [step, setStep] = useState(1);
+    const [submitting, setSubmitting] = useState(false);
+    const [nameError, setNameError] = useState('');
+    const [formData, setFormData] = useState({
+        file: null as File | null,
+        eulaAccepted: false,
+        xmx: '4G',
+        xms: '1G',
+        port: '25565',
+        maxPlayers: '20',
+        motd: 'A Minecraft Server',
+        serverName: 'newserver',
+    });
 
-  const validateName = (name: string): boolean => {
-      if (!name) return false;
-      if (!/^[a-z0-9]+$/.test(name)) {
-          setNameError('Name must only contain lowercase letters and numbers (a-z, 0-9). No spaces or symbols.');
-          return false;
-      }
-      setNameError('');
-      return true;
-  };
-
-  const handleNext = async () => {
-    if (step < 4) {
-        setStep(step + 1);
-    } else {
-        // Validate before submit
-        if (!validateName(formData.serverName)) {
-            return;
+    const validateName = (name: string): boolean => {
+        if (!name) { setNameError('Required'); return false; }
+        if (!/^[a-z0-9-]{3,32}$/.test(name)) {
+            setNameError('Lowercase letters, digits, hyphens — between 3 and 32 chars.');
+            return false;
         }
+        setNameError('');
+        return true;
+    };
 
-        // Submit
+    const handleNext = async () => {
+        if (step < 4) { setStep(step + 1); return; }
+        if (!validateName(formData.serverName)) return;
+
         setSubmitting(true);
         try {
             const data = new FormData();
@@ -61,211 +53,139 @@ export default function ServerWizard({ onViewChange, notify }: Props) {
             data.append('port', formData.port);
             data.append('maxPlayers', formData.maxPlayers);
             data.append('motd', formData.motd);
-            
-            const res = await fetch('/api/server/create', {
-                method: 'POST',
-                headers: getAuthHeaders(),
-                body: data
-            });
+
+            const res = await fetchAuthed('/server/create', { method: 'POST', body: data });
             const response = await res.json();
-            
             if (res.ok && response.success) {
-                notify?.('Server created successfully', 'success');
-                onViewChange(ViewState.DASHBOARD);
+                notify?.(`Server '${response.data?.serverId || formData.serverName}' created`, 'success');
+                if (refreshServers) await refreshServers();
+                onViewChange(ViewState.SERVERS_OVERVIEW);
             } else {
                 notify?.(response.error || 'Failed to create server', 'error');
             }
-        } catch (e) {
-            console.error(e);
-            notify?.('Error connecting to backend', 'error');
+        } catch {
+            notify?.('Network error', 'error');
         }
         setSubmitting(false);
-    }
-  };
+    };
 
-  const handleBack = () => {
-    if (step > 1) setStep(step - 1);
-  };
+    return (
+        <div className="max-w-[640px] mx-auto">
+            <Eyebrow className="mb-4">Setup wizard</Eyebrow>
+            <h1 className="display-lg mb-3">Deploy a server.</h1>
+            <p className="text-[15px] text-[color:var(--color-body)] mb-8 max-w-[40ch]">
+                Four steps. The wizard writes <span className="font-mono text-[13px]">server.properties</span> and a runtime config for you.
+            </p>
 
-  return (
-    <div className="h-full flex flex-col items-center justify-center">
-      <div className="w-full max-w-2xl">
-        <div className="mb-8 text-center">
-            <h2 className="text-3xl font-bold text-laplace-darker">Deploy Server</h2>
-            <p className="text-gray-400 mt-2">Configure and launch your Minecraft instance</p>
-        </div>
-
-        <div className="flex justify-between mb-10 relative">
-          <div className="absolute top-1/2 left-0 w-full h-1 bg-gray-200 -z-10 -translate-y-1/2 rounded-full"></div>
-          <div className="absolute top-1/2 left-0 h-1 bg-laplace-primary -z-10 -translate-y-1/2 rounded-full transition-all duration-300" style={{ width: `${((step - 1) / 3) * 100}%` }}></div>
-          
-          {Steps.map((s) => (
-            <div key={s.id} className="flex flex-col items-center bg-laplace-bg px-2">
-              <div 
-                className={`w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
-                  step >= s.id 
-                    ? 'bg-laplace-primary border-laplace-primary text-white shadow-lg shadow-laplace-primary/30' 
-                    : 'bg-white border-gray-200 text-gray-400'
-                }`}
-              >
-                <s.icon size={18} />
-              </div>
-              <span className={`text-xs font-semibold mt-2 ${step >= s.id ? 'text-laplace-darker' : 'text-gray-400'}`}>
-                {s.title}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        <div className="bg-white rounded-3xl shadow-xl shadow-gray-200/50 p-8 min-h-[400px] flex flex-col border border-gray-100 relative overflow-hidden">
-          
-          <div className="flex-1">
-            {step === 1 && (
-              <div className="h-full flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-2xl bg-gray-50/50 hover:bg-laplace-accent/10 hover:border-laplace-primary transition-colors cursor-pointer group p-10 relative">
-                 <div className="w-16 h-16 bg-white rounded-full shadow-sm flex items-center justify-center text-laplace-primary mb-4 group-hover:scale-110 transition-transform">
-                     <Upload size={32} />
-                 </div>
-                 <h3 className="text-lg font-bold text-laplace-darker">Drop Server Jar</h3>
-                 <p className="text-sm text-gray-400 mt-1">Select the main server file (e.g. server.jar, spigot.jar)</p>
-                 <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={(e) => setFormData({...formData, file: e.target.files ? e.target.files[0] : null})} />
-                 {formData.file && (
-                     <div className="mt-4 bg-laplace-primary/10 text-laplace-primary px-3 py-1 rounded-full text-sm font-medium z-10 flex items-center">
-                         <Check size={14} className="mr-1"/> {formData.file.name}
-                     </div>
-                 )}
-              </div>
-            )}
-
-            {step === 2 && (
-              <div className="h-full flex flex-col justify-center">
-                 <div className="bg-gray-900 text-gray-300 p-6 rounded-xl font-mono text-xs h-64 overflow-y-auto mb-6">
-                     <p>MINECRAFT END USER LICENSE AGREEMENT</p>
-                     <br/>
-                     <p>By checking the box below, you indicate that you have read and agree to the Minecraft EULA (https://account.mojang.com/documents/minecraft_eula).</p>
-                 </div>
-                 <label className="flex items-center space-x-3 p-4 border border-gray-200 rounded-xl cursor-pointer hover:bg-gray-50 transition-colors">
-                     <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${formData.eulaAccepted ? 'bg-laplace-primary border-laplace-primary' : 'border-gray-300'}`}>
-                         {formData.eulaAccepted && <Check size={12} className="text-white" />}
-                     </div>
-                     <input type="checkbox" className="hidden" checked={formData.eulaAccepted} onChange={(e) => setFormData({...formData, eulaAccepted: e.target.checked})} />
-                     <span className="text-sm font-medium text-laplace-darker">I agree to the Minecraft EULA</span>
-                 </label>
-              </div>
-            )}
-
-            {step === 3 && (
-              <div className="h-full flex flex-col justify-center space-y-4 overflow-y-auto">
-                 <div className="grid grid-cols-2 gap-4">
-                     <div>
-                         <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Max RAM (Xmx)</label>
-                         <input 
-                            type="text" 
-                            value={formData.xmx} 
-                            onChange={e => setFormData({...formData, xmx: e.target.value})}
-                            className="w-full bg-laplace-bg border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-laplace-primary transition-colors text-laplace-darker font-medium" 
-                         />
-                         <p className="text-[10px] text-gray-400 mt-1">E.g. 4G. Rec: 4G+</p>
-                     </div>
-                     <div>
-                         <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Startup RAM (Xms)</label>
-                         <input 
-                            type="text" 
-                            value={formData.xms} 
-                            onChange={e => setFormData({...formData, xms: e.target.value})}
-                            className="w-full bg-laplace-bg border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-laplace-primary transition-colors text-laplace-darker font-medium" 
-                         />
-                     </div>
-                 </div>
-                 
-                 <div className="grid grid-cols-2 gap-4">
-                     <div>
-                         <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Server Port</label>
-                         <input 
-                            type="text" 
-                            value={formData.port} 
-                            onChange={e => setFormData({...formData, port: e.target.value})}
-                            className="w-full bg-laplace-bg border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-laplace-primary transition-colors text-laplace-darker font-medium" 
-                         />
-                         <p className="text-[10px] text-gray-400 mt-1">Default: 25565</p>
-                     </div>
-                     <div>
-                         <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Max Players</label>
-                         <input 
-                            type="number" 
-                            value={formData.maxPlayers} 
-                            onChange={e => setFormData({...formData, maxPlayers: e.target.value})}
-                            className="w-full bg-laplace-bg border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-laplace-primary transition-colors text-laplace-darker font-medium" 
-                         />
-                     </div>
-                 </div>
-
-                 <div>
-                     <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Server Description (MOTD)</label>
-                     <input 
-                        type="text" 
-                        value={formData.motd} 
-                        onChange={e => setFormData({...formData, motd: e.target.value})}
-                        className="w-full bg-laplace-bg border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-laplace-primary transition-colors text-laplace-darker font-medium" 
-                     />
-                 </div>
-              </div>
-            )}
-
-            {step === 4 && (
-              <div className="h-full flex flex-col justify-center">
-                  <div className="text-center mb-6">
-                      <div className="inline-flex p-4 bg-laplace-accent rounded-full text-laplace-primary mb-4">
-                          <Tag size={32} />
-                      </div>
-                      <h3 className="text-lg font-bold">Name your Server</h3>
-                      <p className="text-sm text-gray-400">Unique identifier for this instance.</p>
-                  </div>
-                   <input 
-                        type="text" 
-                        value={formData.serverName} 
-                        onChange={e => {
-                            setFormData({...formData, serverName: e.target.value});
-                            validateName(e.target.value);
-                        }}
-                        placeholder="e.g. survival1"
-                        className={`w-full text-center text-xl font-bold bg-transparent border-b-2 py-3 focus:outline-none transition-colors placeholder:text-gray-300
-                            ${nameError ? 'border-red-400 text-red-500' : 'border-gray-200 focus:border-laplace-primary'}
-                        `}
-                     />
-                     {nameError ? (
-                        <div className="mt-3 flex items-center justify-center space-x-2 text-red-500 text-xs font-bold animate-fade-in">
-                            <AlertCircle size={14} />
-                            <span>{nameError}</span>
+            <div className="flex items-center gap-3 mb-8">
+                {STEPS.map((label, i) => (
+                    <React.Fragment key={label}>
+                        <div className="flex items-center gap-2">
+                            <span
+                                className={`w-7 h-7 rounded-full flex items-center justify-center text-[12px] font-medium ${
+                                    step > i + 1
+                                        ? 'bg-[color:var(--color-primary)] text-white'
+                                        : step === i + 1
+                                            ? 'bg-[color:var(--color-ink)] text-white'
+                                            : 'bg-[color:var(--color-surface-card)] text-[color:var(--color-muted)]'
+                                }`}
+                            >
+                                {step > i + 1 ? <Check size={12} /> : i + 1}
+                            </span>
+                            <span className={`text-[12px] ${step === i + 1 ? 'text-[color:var(--color-ink)] font-medium' : 'text-[color:var(--color-muted)]'}`}>{label}</span>
                         </div>
-                     ) : (
-                         <p className="mt-3 text-center text-xs text-gray-400">Lowercase letters and numbers only.</p>
-                     )}
-              </div>
-            )}
-          </div>
+                        {i < STEPS.length - 1 ? <div className="flex-1 h-px bg-[color:var(--color-hairline)]" /> : null}
+                    </React.Fragment>
+                ))}
+            </div>
 
-          <div className="mt-8 flex justify-between">
-            <button 
-                onClick={handleBack} 
-                disabled={step === 1 || submitting}
-                className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-medium transition-colors ${step === 1 ? 'opacity-0 pointer-events-none' : 'text-gray-500 hover:bg-gray-100'}`}
-            >
-                <ArrowLeft size={18} />
-                <span>Back</span>
-            </button>
+            <Card tone="canvas" padded className="mb-6 min-h-[260px]">
+                {step === 1 && (
+                    <div className="relative border border-dashed border-[color:var(--color-hairline)] rounded-md py-12 text-center bg-[color:var(--color-surface-soft)]">
+                        <input
+                            type="file"
+                            accept=".jar"
+                            className="absolute inset-0 opacity-0 cursor-pointer"
+                            onChange={(e) => setFormData({ ...formData, file: e.target.files ? e.target.files[0] : null })}
+                        />
+                        <Upload size={28} className="mx-auto mb-3 text-[color:var(--color-muted)]" />
+                        <div className="text-[15px] text-[color:var(--color-ink)] font-medium mb-1">Drop a .jar here</div>
+                        <div className="text-[12.5px] text-[color:var(--color-muted)]">Vanilla, Paper, Forge, Fabric — all accepted.</div>
+                        {formData.file ? (
+                            <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[color:var(--color-primary)]/10 text-[color:var(--color-primary)] text-[12px]">
+                                <Check size={12} /> {formData.file.name}
+                            </div>
+                        ) : null}
+                    </div>
+                )}
 
-            <button 
-                onClick={handleNext}
-                disabled={(step === 2 && !formData.eulaAccepted) || (step === 4 && !!nameError) || submitting}
-                className="flex items-center space-x-2 px-8 py-3 bg-laplace-darker text-white rounded-xl shadow-lg shadow-gray-900/10 hover:bg-black transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-                {submitting ? <Loader2 className="animate-spin" size={18} /> : <span>{step === 4 ? 'Deploy' : 'Next Step'}</span>}
-                {!submitting && <ArrowRight size={18} />}
-            </button>
-          </div>
+                {step === 2 && (
+                    <div>
+                        <div className="rounded-md bg-[color:var(--color-surface-dark)] text-[color:var(--color-on-dark)] p-5 font-mono text-[12px] leading-relaxed h-48 overflow-auto mb-5">
+                            <p className="font-display text-[color:var(--color-on-dark)] text-[18px] mb-3">MINECRAFT END USER LICENSE AGREEMENT</p>
+                            <p>Operating a Minecraft server means agreeing to the Minecraft EULA at https://account.mojang.com/documents/minecraft_eula.</p>
+                            <p className="mt-3">By checking the box you acknowledge that you have read it and accept the terms.</p>
+                        </div>
+                        <label className="flex items-center gap-3 cursor-pointer">
+                            <span
+                                className={`w-5 h-5 rounded border flex items-center justify-center ${formData.eulaAccepted ? 'bg-[color:var(--color-primary)] border-[color:var(--color-primary)]' : 'border-[color:var(--color-hairline)]'}`}
+                            >
+                                {formData.eulaAccepted ? <Check size={12} className="text-white" /> : null}
+                            </span>
+                            <input type="checkbox" className="hidden" checked={formData.eulaAccepted} onChange={(e) => setFormData({ ...formData, eulaAccepted: e.target.checked })} />
+                            <span className="text-[14px] text-[color:var(--color-ink)]">I agree to the Minecraft EULA.</span>
+                        </label>
+                    </div>
+                )}
 
+                {step === 3 && (
+                    <div className="space-y-5">
+                        <div className="grid grid-cols-2 gap-4">
+                            <Input label="Max RAM (Xmx)" value={formData.xmx} onChange={(e) => setFormData({ ...formData, xmx: e.target.value })} helper="e.g. 4G" />
+                            <Input label="Initial RAM (Xms)" value={formData.xms} onChange={(e) => setFormData({ ...formData, xms: e.target.value })} helper="e.g. 1G" />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <Input label="Server port" value={formData.port} onChange={(e) => setFormData({ ...formData, port: e.target.value })} helper="Default: 25565" />
+                            <Input label="Max players" type="number" value={formData.maxPlayers} onChange={(e) => setFormData({ ...formData, maxPlayers: e.target.value })} />
+                        </div>
+                        <Input label="MOTD" value={formData.motd} onChange={(e) => setFormData({ ...formData, motd: e.target.value })} />
+                    </div>
+                )}
+
+                {step === 4 && (
+                    <div className="text-center py-6">
+                        <Eyebrow className="mb-3">Identifier</Eyebrow>
+                        <input
+                            type="text"
+                            value={formData.serverName}
+                            onChange={(e) => { setFormData({ ...formData, serverName: e.target.value }); validateName(e.target.value); }}
+                            placeholder="survival"
+                            className="w-full text-center font-display text-[36px] tracking-[-0.5px] text-[color:var(--color-ink)] bg-transparent border-0 border-b-2 py-2 focus:outline-none placeholder:text-[color:var(--color-muted-soft)]"
+                            style={{ borderColor: nameError ? 'var(--color-error)' : 'var(--color-hairline)' }}
+                        />
+                        {nameError ? (
+                            <div className="mt-3 flex items-center justify-center gap-2 text-[12px] text-[color:var(--color-error)]">
+                                <AlertCircle size={12} /> {nameError}
+                            </div>
+                        ) : (
+                            <p className="mt-3 text-[12px] text-[color:var(--color-muted)]">Lowercase, digits, hyphens. 3–32 chars.</p>
+                        )}
+                    </div>
+                )}
+            </Card>
+
+            <div className="flex justify-between">
+                <Button variant="ghost" onClick={() => step > 1 && setStep(step - 1)} disabled={step === 1 || submitting}>
+                    <ArrowLeft size={14} /> Back
+                </Button>
+                <Button
+                    onClick={handleNext}
+                    disabled={(step === 1 && !formData.file) || (step === 2 && !formData.eulaAccepted) || (step === 4 && !!nameError) || submitting}
+                    loading={submitting}
+                >
+                    {step === 4 ? 'Deploy' : 'Next'} <ArrowRight size={14} />
+                </Button>
+            </div>
         </div>
-      </div>
-    </div>
-  );
+    );
 }

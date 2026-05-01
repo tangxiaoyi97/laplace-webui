@@ -1,0 +1,19 @@
+{
+  "id": "extension-example",
+  "name": "WebUI Extension Example",
+  "version": "0.1.0",
+  "apiVersion": "1.0.0",
+  "entry": "index.ts",
+  "author": "laplace",
+  "description": "Reference plugin demonstrating the webui extension API: a section, two tiles, and a CSS preset.",
+  "capabilities": {
+    "httpRoutes": true,
+    "staticAssets": true,
+    "tuiCommands": false,
+    "wsAccess": false,
+    "configAccess": false
+  },
+  "prerequisites": [
+    { "id": "webui", "level": "required" }
+  ]
+}

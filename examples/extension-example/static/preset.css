@@ -1,0 +1,22 @@
+/*
+ * Extension Example — preset stylesheet.
+ *
+ * This file is injected into the webui's <head> by registerStylesheet().
+ * It demonstrates two things plugin authors can do:
+ *
+ * 1. Reuse Raspberry tokens — every webui CSS variable is in scope here.
+ * 2. Add a few utility classes the plugin's own iframe content can opt into.
+ *
+ * Want to override webui styles instead of presetting? Use role: 'override'
+ * on registerStylesheet(); your rules will be appended after webui's CSS so
+ * cascade order favours yours.
+ */
+
+/* Subtle hover lift for any element marked .ext-lift */
+.ext-lift {
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.ext-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(20, 20, 19, 0.07);
+}

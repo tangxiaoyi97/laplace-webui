@@ -1,315 +1,278 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Folder, FileText, MoreVertical, UploadCloud, Search, Trash2, Edit, X, Save, FileCode, ArrowUp, Loader2, Download } from 'lucide-react';
+import { Folder, FileText, UploadCloud, Trash2, Edit, Save, ArrowUp, Download, X } from 'lucide-react';
 import type { FileItem } from '../types.ts';
-import { getAuthHeaders } from '../lib/api.ts';
+import { fetchScoped, postScoped } from '../lib/api.ts';
+import { Button, Card, Eyebrow, SectionHeader } from './primitives.tsx';
+import { useConfirm } from './confirm.tsx';
 
 interface Props {
     notify?: (msg: string, type: 'success' | 'error' | 'info') => void;
+    currentServerId: string | null;
 }
 
-const API_BASE = '/api/files';
+export default function FileManager({ notify, currentServerId }: Props) {
+    const confirm = useConfirm();
+    const [path, setPath] = useState('/');
+    const [files, setFiles] = useState<FileItem[]>([]);
+    const [editingFile, setEditingFile] = useState<{ path: string; content: string; serverId: string } | null>(null);
+    const [editorSaving, setEditorSaving] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [uploading, setUploading] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    // Each fetch starts a new generation; stale responses from older generations are dropped.
+    const generationRef = useRef(0);
 
-export default function FileManager({ notify }: Props) {
-  const [path, setPath] = useState('/');
-  const [files, setFiles] = useState<FileItem[]>([]);
-  const [editingFile, setEditingFile] = useState<{path: string, content: string} | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+    // Wipe per-server state when the focused server changes.
+    useEffect(() => {
+        setPath('/');
+        setFiles([]);
+        setEditingFile(null);
+    }, [currentServerId]);
 
-  const fetchFiles = async (p: string) => {
-      setLoading(true);
-      try {
-          const encodedPath = encodeURIComponent(p);
-          const res = await fetch(`${API_BASE}/list?path=${encodedPath}`, {
-              headers: getAuthHeaders()
-          });
-          const response = await res.json();
-          if (res.ok && response.success && Array.isArray(response.data)) {
-              setFiles(response.data.sort((a: any,b: any) => (a.isDirectory === b.isDirectory ? 0 : a.isDirectory ? -1 : 1)));
-          } else {
-              setFiles([]);
-              notify?.('Failed to list files', 'error');
-          }
-      } catch (e) {
-          console.error(e);
-          notify?.('Network error', 'error');
-          setFiles([]);
-      }
-      setLoading(false);
-  };
+    useEffect(() => {
+        if (!currentServerId) return;
+        const myGen = ++generationRef.current;
+        let cancelled = false;
+        (async () => {
+            setLoading(true);
+            try {
+                const res = await fetchScoped(`/files/list?path=${encodeURIComponent(path)}`, currentServerId);
+                const response = await res.json();
+                if (cancelled || generationRef.current !== myGen) return;
+                if (res.ok && response.success && Array.isArray(response.data)) {
+                    setFiles(response.data.sort((a: any, b: any) => (a.isDirectory === b.isDirectory ? 0 : a.isDirectory ? -1 : 1)));
+                } else {
+                    setFiles([]);
+                    notify?.('Failed to list files', 'error');
+                }
+            } catch {
+                if (!cancelled && generationRef.current === myGen) {
+                    notify?.('Network error', 'error');
+                    setFiles([]);
+                }
+            } finally {
+                if (!cancelled && generationRef.current === myGen) setLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [path, currentServerId]);
 
-  useEffect(() => {
-      fetchFiles(path);
-  }, [path]);
+    const refreshCurrentDir = () => { generationRef.current++; setPath((p) => p); };
 
-  const handleFolderClick = (folderName: string) => {
-    const newPath = path === '/' ? `/${folderName}` : `${path}/${folderName}`;
-    setPath(newPath);
-  };
+    const handleFolderClick = (name: string) => setPath(path === '/' ? `/${name}` : `${path}/${name}`);
+    const handleUp = () => {
+        if (path === '/') return;
+        const parts = path.split('/').filter(Boolean);
+        parts.pop();
+        setPath(parts.length === 0 ? '/' : '/' + parts.join('/'));
+    };
 
-  const handleUp = () => {
-      if (path === '/') return;
-      const parts = path.split('/').filter(Boolean);
-      parts.pop();
-      const newPath = parts.length === 0 ? '/' : '/' + parts.join('/');
-      setPath(newPath);
-  };
+    const handleEdit = async (filePath: string) => {
+        if (!currentServerId) return;
+        try {
+            const res = await fetchScoped(`/files/content?path=${encodeURIComponent(filePath)}`, currentServerId);
+            const response = await res.json();
+            if (response.success) setEditingFile({ path: filePath, content: response.data.content, serverId: currentServerId });
+            else notify?.(response.error || 'Read failed', 'error');
+        } catch { notify?.('Failed to read file', 'error'); }
+    };
 
-  const handleEdit = async (filePath: string) => {
-      try {
-          const res = await fetch(`${API_BASE}/content?path=${encodeURIComponent(filePath)}`, {
-              headers: getAuthHeaders()
-          });
-          const response = await res.json();
-          if (!response.success) {
-              notify?.(response.error || 'Read failed', 'error');
-          } else {
-              setEditingFile({ path: filePath, content: response.data.content });
-          }
-      } catch (e) {
-          notify?.('Failed to read file', 'error');
-      }
-  };
+    const handleSave = async () => {
+        if (!editingFile) return;
+        // Defensive: if the focused server changed while editing, don't write to the wrong server.
+        if (editingFile.serverId !== currentServerId) {
+            notify?.('You switched servers while editing. Re-open the file to save changes.', 'error');
+            setEditingFile(null);
+            return;
+        }
+        setEditorSaving(true);
+        try {
+            const res = await postScoped('/files/write', editingFile.serverId, {
+                path: editingFile.path,
+                content: editingFile.content,
+            });
+            const response = await res.json();
+            if (res.ok && response.success) {
+                setEditingFile(null);
+                refreshCurrentDir();
+                notify?.('Saved', 'success');
+            } else notify?.(response.error || 'Save failed', 'error');
+        } catch { notify?.('Network error', 'error'); }
+        finally { setEditorSaving(false); }
+    };
 
-  const handleSave = async () => {
-      if (!editingFile) return;
-      try {
-          const res = await fetch(`${API_BASE}/write`, {
-              method: 'POST',
-              headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-              body: JSON.stringify({ path: editingFile.path, content: editingFile.content })
-          });
-          const response = await res.json();
-          if (res.ok && response.success) {
-              setEditingFile(null);
-              fetchFiles(path); 
-              notify?.('File saved successfully', 'success');
-          } else {
-              notify?.(response.error || 'Failed to save file', 'error');
-          }
-      } catch (e) {
-          notify?.('Network error during save', 'error');
-      }
-  };
+    const handleDelete = async (filePath: string) => {
+        if (!currentServerId) return;
+        const ok = await confirm({
+            title: `Delete "${filePath}"?`,
+            message: 'This removes the file from the server directory. Cannot be undone.',
+            danger: true,
+            confirmLabel: 'Delete',
+        });
+        if (!ok) return;
+        try {
+            const res = await postScoped('/files/delete', currentServerId, { path: filePath });
+            const response = await res.json();
+            if (res.ok && response.success) { refreshCurrentDir(); notify?.('Deleted', 'success'); }
+            else notify?.(response.error || 'Delete failed', 'error');
+        } catch { notify?.('Delete error', 'error'); }
+    };
 
-  const handleDelete = async (filePath: string) => {
-      if (!confirm(`Are you sure you want to delete ${filePath}? This cannot be undone.`)) return;
-      try {
-          const res = await fetch(`${API_BASE}/delete`, {
-              method: 'POST',
-              headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-              body: JSON.stringify({ path: filePath })
-          });
-          const response = await res.json();
-          if (res.ok && response.success) {
-            fetchFiles(path);
-            notify?.('Deleted successfully', 'success');
-          } else {
-            notify?.(response.error || 'Delete failed', 'error');
-          }
-      } catch (e) {
-          notify?.('Delete error', 'error');
-      }
-  };
+    const handleDownload = async (filePath: string) => {
+        try {
+            const response = await fetchScoped(`/files/download?path=${encodeURIComponent(filePath)}`, currentServerId);
+            if (!response.ok) throw new Error('failed');
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = filePath.split('/').pop() || 'download.bin';
+            document.body.appendChild(a); a.click(); a.remove();
+            URL.revokeObjectURL(url);
+        } catch { notify?.('Download failed', 'error'); }
+    };
 
-  const handleDownload = async (filePath: string) => {
-      try {
-          const response = await fetch(`${API_BASE}/download?path=${encodeURIComponent(filePath)}`, {
-              headers: getAuthHeaders()
-          });
-          if (!response.ok) {
-              throw new Error('Download failed');
-          }
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!e.target.files || e.target.files.length === 0) return;
+        const file = e.target.files[0];
+        setUploading(true);
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('path', path);
+        if (currentServerId) formData.append('serverId', currentServerId);
+        try {
+            const res = await fetchScoped('/files/upload', currentServerId, { method: 'POST', body: formData });
+            const response = await res.json();
+            if (res.ok && response.success) { notify?.('Uploaded', 'success'); refreshCurrentDir(); }
+            else notify?.(response.error || 'Upload failed', 'error');
+        } catch { notify?.('Upload error', 'error'); }
+        setUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    };
 
-          const blob = await response.blob();
-          const disposition = response.headers.get('content-disposition') || '';
-          const matchedName = disposition.match(/filename="?([^"]+)"?/i)?.[1];
-          const fallbackName = filePath.split('/').pop() || 'download.bin';
-          const fileName = matchedName || fallbackName;
+    const formatSize = (bytes?: number) => {
+        if (bytes === undefined) return '—';
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+    };
 
-          const url = URL.createObjectURL(blob);
-          const anchor = document.createElement('a');
-          anchor.href = url;
-          anchor.download = fileName;
-          document.body.appendChild(anchor);
-          anchor.click();
-          anchor.remove();
-          URL.revokeObjectURL(url);
-      } catch (e) {
-          notify?.('Download failed', 'error');
-      }
-  };
+    return (
+        <div>
+            <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
 
-  const triggerUpload = () => {
-      if (fileInputRef.current) fileInputRef.current.click();
-  };
+            <SectionHeader
+                eyebrow="Operations"
+                title="Files"
+                lead="Browse, edit, and upload files inside the active server directory. Path traversal and symlink escapes are blocked."
+                action={
+                    <div className="flex gap-2">
+                        <Button variant="secondary" size="md" onClick={handleUp} disabled={path === '/'}>
+                            <ArrowUp size={14} /> Up
+                        </Button>
+                        <Button size="md" onClick={() => fileInputRef.current?.click()} loading={uploading}>
+                            <UploadCloud size={14} /> Upload
+                        </Button>
+                    </div>
+                }
+            />
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (!e.target.files || e.target.files.length === 0) return;
-      const file = e.target.files[0];
-      setUploading(true);
+            <Card tone="cream" padded className="mb-5 flex items-center gap-3">
+                <Eyebrow>Path</Eyebrow>
+                <span className="font-mono text-[13px] text-[color:var(--color-ink)]">/{path === '/' ? '' : path.replace(/^\//, '')}</span>
+            </Card>
 
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('path', path);
-
-      try {
-          const res = await fetch(`${API_BASE}/upload`, {
-              method: 'POST',
-              headers: getAuthHeaders(),
-              body: formData
-          });
-          const response = await res.json();
-          if (res.ok && response.success) {
-              notify?.('File uploaded successfully', 'success');
-              fetchFiles(path);
-          } else {
-              notify?.(response.error || 'Upload failed', 'error');
-          }
-      } catch (err) {
-          notify?.('Network error uploading file', 'error');
-      }
-      
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = ''; // Reset
-  };
-
-  const formatSize = (bytes?: number) => {
-    if (bytes === undefined) return '-';
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  return (
-    <div className="h-full flex flex-col bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden relative">
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        onChange={handleFileUpload} 
-        className="hidden" 
-      />
-
-      {/* Toolbar */}
-      <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-white z-10">
-        <div className="flex items-center space-x-3 overflow-hidden">
-            <button 
-                onClick={handleUp} 
-                disabled={path === '/'}
-                className="p-2 bg-gray-100 rounded-lg text-gray-500 hover:bg-laplace-primary hover:text-white transition-colors disabled:opacity-50 disabled:hover:bg-gray-100 disabled:hover:text-gray-500"
-            >
-                <ArrowUp size={18} />
-            </button>
-            <div className="flex items-center text-sm font-medium bg-gray-50 px-3 py-2 rounded-lg border border-gray-100">
-                <span className="text-gray-400 mr-2 select-none">/ root</span>
-                <span className="text-laplace-darker font-mono">{path === '/' ? '' : path}</span>
-            </div>
-        </div>
-
-        <div className="flex items-center space-x-3">
-            <button 
-                onClick={triggerUpload}
-                disabled={uploading}
-                className="flex items-center space-x-2 px-4 py-2 bg-laplace-primary text-white rounded-lg text-xs font-bold hover:bg-opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-                {uploading ? <Loader2 className="animate-spin" size={14} /> : <UploadCloud size={14} />}
-                <span>{uploading ? 'Uploading...' : 'Upload'}</span>
-            </button>
-        </div>
-      </div>
-
-      {/* File List */}
-      <div className="flex-1 overflow-y-auto p-2">
-        {loading && files.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full space-y-3">
-                <Loader2 className="animate-spin text-laplace-primary" size={32} />
-                <span className="text-gray-400 text-sm">Loading files...</span>
-            </div>
-        ) : files.length === 0 ? (
-             <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                 <Folder size={48} className="mb-2 text-gray-200" />
-                 <p>Directory is empty</p>
-             </div>
-        ) : (
-            <table className="w-full text-left border-collapse">
-                <thead>
-                    <tr className="text-xs font-bold text-gray-400 uppercase border-b border-gray-100">
-                        <th className="p-4 font-bold">Name</th>
-                        <th className="p-4 font-bold w-32">Size</th>
-                        <th className="p-4 font-bold w-48">Last Modified</th>
-                        <th className="p-4 w-24 text-right">Actions</th>
-                    </tr>
-                </thead>
-                <tbody className="text-sm">
-                    {files.map((file, idx) => (
-                        <tr key={idx} className="group hover:bg-laplace-bg transition-colors border-b border-gray-50 last:border-0">
-                            <td className="p-4">
-                                <div className="flex items-center cursor-pointer select-none" onClick={() => file.isDirectory && handleFolderClick(file.name)}>
-                                    {file.isDirectory ? (
-                                        <Folder className="text-yellow-400 mr-3 fill-yellow-400" size={20} />
-                                    ) : (
-                                        <FileText className="text-gray-400 mr-3" size={20} />
-                                    )}
-                                    <span className={`font-medium ${file.isDirectory ? 'text-laplace-darker' : 'text-gray-600'}`}>
-                                        {file.name}
-                                    </span>
-                                </div>
-                            </td>
-                            <td className="p-4 text-gray-400 font-mono text-xs">{formatSize(file.size)}</td>
-                            <td className="p-4 text-gray-400 text-xs">{new Date(file.lastModified).toLocaleDateString()}</td>
-                            <td className="p-4 text-right">
-                            <div className="flex justify-end space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                {!file.isDirectory && (
-                                    <>
-                                        <button onClick={() => handleDownload(file.path)} className="p-1.5 text-gray-400 hover:text-blue-500 transition-colors" title="Download">
-                                            <Download size={16} />
+            <Card tone="canvas" padded={false} className="overflow-hidden">
+                {!currentServerId ? (
+                    <div className="text-center py-16 text-[14px] text-[color:var(--color-muted)]">Pick a server to browse its files.</div>
+                ) : loading && files.length === 0 ? (
+                    <div className="flex items-center justify-center gap-3 py-16 text-[14px] text-[color:var(--color-muted)]">
+                        <div className="w-4 h-4 rounded-full border-2 border-[color:var(--color-primary)] border-r-transparent animate-spin" />
+                        <span>Loading files for {currentServerId}…</span>
+                    </div>
+                ) : files.length === 0 ? (
+                    <div className="text-center py-16 text-[14px] text-[color:var(--color-muted)]">Directory is empty.</div>
+                ) : (
+                    <table className="w-full text-left">
+                        <thead>
+                            <tr className="border-b border-[color:var(--color-hairline)]">
+                                <th className="px-5 py-3 eyebrow text-[10px] font-medium">Name</th>
+                                <th className="px-5 py-3 eyebrow text-[10px] font-medium w-28">Size</th>
+                                <th className="px-5 py-3 eyebrow text-[10px] font-medium w-44">Modified</th>
+                                <th className="px-5 py-3 w-32"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {files.map((file, idx) => (
+                                <tr key={idx} className="group border-b border-[color:var(--color-hairline-soft)] last:border-0 hover:bg-[color:var(--color-surface-soft)]">
+                                    <td className="px-5 py-3">
+                                        <button
+                                            onClick={() => file.isDirectory ? handleFolderClick(file.name) : handleEdit(file.path)}
+                                            className="flex items-center gap-3 text-left w-full"
+                                        >
+                                            {file.isDirectory ? (
+                                                <Folder size={16} className="text-[color:var(--color-accent-ochre)]" />
+                                            ) : (
+                                                <FileText size={16} className="text-[color:var(--color-muted)]" />
+                                            )}
+                                            <span className={`text-[14px] ${file.isDirectory ? 'text-[color:var(--color-ink)] font-medium' : 'text-[color:var(--color-body)]'}`}>{file.name}</span>
                                         </button>
-                                        <button onClick={() => handleEdit(file.path)} className="p-1.5 text-gray-400 hover:text-laplace-primary transition-colors" title="Edit">
-                                            <Edit size={16} />
-                                        </button>
-                                    </>
-                                )}
-                                <button onClick={() => handleDelete(file.path)} className="p-1.5 text-gray-400 hover:text-red-500 transition-colors" title="Delete">
-                                    <Trash2 size={16} />
-                                </button>
-                            </div>
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        )}
-      </div>
+                                    </td>
+                                    <td className="px-5 py-3 text-[12.5px] font-mono text-[color:var(--color-muted)]">{formatSize(file.size)}</td>
+                                    <td className="px-5 py-3 text-[12.5px] text-[color:var(--color-muted)]">{new Date(file.lastModified).toLocaleString()}</td>
+                                    <td className="px-5 py-3">
+                                        <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            {!file.isDirectory && (
+                                                <>
+                                                    <button onClick={() => handleDownload(file.path)} className="p-1.5 text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)]" title="Download">
+                                                        <Download size={14} />
+                                                    </button>
+                                                    <button onClick={() => handleEdit(file.path)} className="p-1.5 text-[color:var(--color-muted)] hover:text-[color:var(--color-primary)]" title="Edit">
+                                                        <Edit size={14} />
+                                                    </button>
+                                                </>
+                                            )}
+                                            <button onClick={() => handleDelete(file.path)} className="p-1.5 text-[color:var(--color-muted)] hover:text-[color:var(--color-error)]" title="Delete">
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+            </Card>
 
-      {/* Editor Modal */}
-      {editingFile && (
-          <div className="absolute inset-0 bg-white z-20 flex flex-col animate-fade-in">
-              <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-gray-50">
-                  <div className="flex items-center space-x-3">
-                      <FileCode className="text-laplace-primary" size={20} />
-                      <span className="font-bold text-laplace-darker">{editingFile.path}</span>
-                  </div>
-                  <div className="flex space-x-2">
-                      <button onClick={() => setEditingFile(null)} className="px-4 py-2 text-gray-500 hover:bg-gray-200 rounded-lg text-sm font-medium">Cancel</button>
-                      <button onClick={handleSave} className="px-4 py-2 bg-laplace-primary text-white rounded-lg text-sm font-medium flex items-center space-x-2 hover:bg-opacity-90">
-                          <Save size={16} />
-                          <span>Save Changes</span>
-                      </button>
-                  </div>
-              </div>
-              <div className="flex-1 relative">
-                  <textarea 
-                      className="absolute inset-0 w-full h-full p-4 font-mono text-sm resize-none focus:outline-none text-gray-700 bg-white"
-                      value={editingFile.content}
-                      onChange={(e) => setEditingFile({...editingFile, content: e.target.value})}
-                      spellCheck={false}
-                  />
-              </div>
-          </div>
-      )}
-    </div>
-  );
+            {editingFile && (
+                <div className="fixed inset-0 z-50 bg-[color:var(--color-canvas)] flex flex-col animate-fade-in">
+                    <div className="flex items-center justify-between px-10 h-16 border-b border-[color:var(--color-hairline)]">
+                        <div className="flex items-center gap-3 min-w-0">
+                            <FileText size={16} className="text-[color:var(--color-primary)]" />
+                            <span className="font-mono text-[13px] text-[color:var(--color-ink)] truncate">{editingFile.path}</span>
+                            <span className="font-mono text-[11px] text-[color:var(--color-muted)] shrink-0">@ {editingFile.serverId}</span>
+                            {editingFile.serverId !== currentServerId ? (
+                                <span className="text-[11px] text-[color:var(--color-error)] shrink-0">⚠ focus changed — Save will refuse</span>
+                            ) : null}
+                        </div>
+                        <div className="flex gap-2">
+                            <Button variant="ghost" size="md" onClick={() => setEditingFile(null)}>
+                                <X size={14} /> Cancel
+                            </Button>
+                            <Button size="md" onClick={handleSave} loading={editorSaving} disabled={editingFile.serverId !== currentServerId}>
+                                <Save size={14} /> Save
+                            </Button>
+                        </div>
+                    </div>
+                    <textarea
+                        value={editingFile.content}
+                        onChange={(e) => setEditingFile({ ...editingFile, content: e.target.value })}
+                        spellCheck={false}
+                        className="flex-1 w-full p-10 font-mono text-[13px] leading-relaxed bg-[color:var(--color-canvas)] text-[color:var(--color-ink)] focus:outline-none resize-none"
+                    />
+                </div>
+            )}
+        </div>
+    );
 }

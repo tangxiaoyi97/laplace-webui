@@ -1,244 +1,202 @@
-import React, { useState, useEffect } from 'react';
-import { Archive, Plus, Trash2, RotateCw, RotateCcw, Clock, HardDrive, AlertTriangle, Lock, Download } from 'lucide-react';
-import type { BackupItem } from '../types.ts';
-import type { ServerStatus } from '../types.ts';
-import { getAuthHeaders } from '../lib/api.ts';
+import React, { useState, useEffect, useRef } from 'react';
+import { Plus, Trash2, RotateCcw, Lock, Download, AlertTriangle } from 'lucide-react';
+import type { BackupItem, ServerStatus } from '../types.ts';
+import { fetchScoped, postScoped } from '../lib/api.ts';
+import { Button, Card, Pill, SectionHeader, StatusDot } from './primitives.tsx';
+import { useConfirm } from './confirm.tsx';
 
 interface Props {
     notify?: (msg: string, type: 'success' | 'error' | 'info') => void;
+    currentServerId: string | null;
 }
 
-export default function BackupManager({ notify }: Props) {
+export default function BackupManager({ notify, currentServerId }: Props) {
+    const confirm = useConfirm();
     const [backups, setBackups] = useState<BackupItem[]>([]);
     const [loading, setLoading] = useState(false);
     const [creating, setCreating] = useState(false);
     const [status, setStatus] = useState<ServerStatus>({ running: false, activeServerId: null, status: 'OFFLINE' });
-
-    const fetchData = async () => {
-        setLoading(true);
-        try {
-            const [bRes, sRes] = await Promise.all([
-                fetch('/api/backups', { headers: getAuthHeaders() }),
-                fetch('/api/server/status', { headers: getAuthHeaders() })
-            ]);
-
-            const bData = await bRes.json();
-            const sData = await sRes.json();
-
-            if (bRes.ok && bData.success && Array.isArray(bData.data)) setBackups(bData.data);
-            if (sRes.ok && sData.success) setStatus(sData.data);
-        } catch (e) {
-            console.error(e);
-            notify?.('Failed to load backup data', 'error');
-        }
-        setLoading(false);
-    };
+    const generationRef = useRef(0);
 
     useEffect(() => {
+        setBackups([]);
+        setStatus({ running: false, activeServerId: null, status: 'OFFLINE' });
+    }, [currentServerId]);
+
+    useEffect(() => {
+        if (!currentServerId) return;
+        let cancelled = false;
+        const myGen = ++generationRef.current;
+        const fetchData = async () => {
+            try {
+                const [bRes, sRes] = await Promise.all([
+                    fetchScoped('/backups', currentServerId),
+                    fetchScoped('/server/status', currentServerId),
+                ]);
+                if (cancelled || generationRef.current !== myGen) return;
+                const bData = await bRes.json();
+                const sData = await sRes.json();
+                if (cancelled || generationRef.current !== myGen) return;
+                if (bRes.ok && bData.success && Array.isArray(bData.data)) setBackups(bData.data);
+                if (sRes.ok && sData.success) setStatus(sData.data);
+            } catch {
+                if (!cancelled && generationRef.current === myGen) notify?.('Failed to load backup data', 'error');
+            } finally {
+                if (!cancelled && generationRef.current === myGen) setLoading(false);
+            }
+        };
+        setLoading(true);
         fetchData();
         const interval = setInterval(fetchData, 5000);
-        return () => clearInterval(interval);
-    }, []);
+        return () => { cancelled = true; clearInterval(interval); };
+    }, [currentServerId]);
+
+    const refreshNow = () => { generationRef.current++; };
+
+    const isLocked = status.status !== 'OFFLINE' || Boolean(status.busy);
 
     const handleCreate = async () => {
-        if (status.status !== 'OFFLINE' || status.busy) {
-            notify?.('Server must be OFFLINE to create a backup.', 'error');
-            return;
-        }
+        if (isLocked) { notify?.('Server must be OFFLINE to create a backup.', 'error'); return; }
+        if (!currentServerId) return;
         setCreating(true);
         try {
-            const res = await fetch('/api/backups/create', {
-                method: 'POST',
-                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({}) // Can add name support later
-            });
+            const res = await postScoped('/backups/create', currentServerId, {});
             const response = await res.json();
-            if (res.ok && response.success) {
-                notify?.('Backup created successfully', 'success');
-                fetchData();
-            } else {
-                notify?.(response.error || 'Failed to create backup', 'error');
-            }
-        } catch (e) {
-            notify?.('Network error', 'error');
-        }
+            if (res.ok && response.success) { notify?.('Backup created', 'success'); refreshNow(); }
+            else notify?.(response.error || 'Failed to create backup', 'error');
+        } catch { notify?.('Network error', 'error'); }
         setCreating(false);
     };
 
     const handleDelete = async (id: string) => {
-        if (!confirm('Are you sure you want to delete this backup?')) return;
+        const ok = await confirm({
+            title: 'Delete this backup?',
+            message: <>Snapshot <span className="font-mono">{id}</span> will be removed permanently.</>,
+            danger: true,
+            confirmLabel: 'Delete',
+        });
+        if (!ok) return;
         try {
-            const res = await fetch('/api/backups/delete', {
-                method: 'POST',
-                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ id })
-            });
+            const res = await postScoped('/backups/delete', currentServerId, { id });
             const response = await res.json();
-            if (res.ok && response.success) {
-                fetchData();
-                notify?.('Backup deleted', 'success');
-            } else {
-                notify?.(response.error || 'Delete failed', 'error');
-            }
-        } catch (e) {
-            notify?.('Delete error', 'error');
-        }
+            if (res.ok && response.success) { notify?.('Deleted', 'success'); refreshNow(); }
+            else notify?.(response.error || 'Delete failed', 'error');
+        } catch { notify?.('Delete error', 'error'); }
     };
 
     const handleRestore = async (id: string) => {
-        // Double Check Client Side
-        if (status.status !== 'OFFLINE' || status.busy) {
-            notify?.('Action Blocked: Server must be OFFLINE to restore.', 'error');
-            return;
-        }
-        if (!confirm('WARNING: This will overwrite your current server files. Are you sure?')) return;
-        
+        if (isLocked) { notify?.('Server must be OFFLINE to restore.', 'error'); return; }
+        const ok = await confirm({
+            title: 'Restore from this snapshot?',
+            message: <>This overwrites the current server directory with the contents of <span className="font-mono">{id}</span>. Make a fresh backup first if you might want to come back.</>,
+            danger: true,
+            confirmLabel: 'Restore',
+        });
+        if (!ok) return;
         try {
-            notify?.('Restore started. Please wait...', 'info');
-            const res = await fetch('/api/backups/restore', {
-                method: 'POST',
-                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ id })
-            });
+            notify?.('Restore started…', 'info');
+            const res = await postScoped('/backups/restore', currentServerId, { id });
             const response = await res.json();
-            if (res.ok && response.success) {
-                notify?.('Server restored successfully', 'success');
-            } else {
-                notify?.(response.error || 'Restore failed', 'error');
-            }
-        } catch (e) {
-            notify?.('Restore error', 'error');
-        }
+            if (res.ok && response.success) notify?.('Server restored', 'success');
+            else notify?.(response.error || 'Restore failed', 'error');
+        } catch { notify?.('Restore error', 'error'); }
     };
 
     const handleDownload = async (id: string) => {
         try {
-            const response = await fetch(`/api/backups/download?id=${encodeURIComponent(id)}`, {
-                headers: getAuthHeaders()
-            });
-            if (!response.ok) {
-                throw new Error('Download failed');
-            }
-
+            const response = await fetchScoped(`/backups/download?id=${encodeURIComponent(id)}`, currentServerId);
+            if (!response.ok) throw new Error('Download failed');
             const blob = await response.blob();
-            const disposition = response.headers.get('content-disposition') || '';
-            const matchedName = disposition.match(/filename="?([^"]+)"?/i)?.[1];
-            const fileName = matchedName || `${id}.zip`;
             const url = URL.createObjectURL(blob);
-            const anchor = document.createElement('a');
-            anchor.href = url;
-            anchor.download = fileName;
-            document.body.appendChild(anchor);
-            anchor.click();
-            anchor.remove();
+            const a = document.createElement('a');
+            a.href = url; a.download = `${id}.zip`;
+            document.body.appendChild(a); a.click(); a.remove();
             URL.revokeObjectURL(url);
-        } catch (e) {
-            notify?.('Backup download failed', 'error');
-        }
+        } catch { notify?.('Download failed', 'error'); }
     };
 
     const formatSize = (bytes: number) => {
-        if (bytes === 0) return '0 B';
+        if (!bytes) return '0 B';
         const k = 1024;
         const sizes = ['B', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
     };
 
-    const isLocked = status.status !== 'OFFLINE' || Boolean(status.busy);
-
     return (
-        <div className="h-full flex flex-col bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden relative">
-            
-            {/* Header */}
-            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white z-10">
-                <div>
-                    <h2 className="text-2xl font-bold text-laplace-darker flex items-center gap-2">
-                        <Archive className="text-laplace-primary" /> System Backups
-                    </h2>
-                    <p className="text-gray-400 text-sm mt-1">Manage snapshots and restore points.</p>
-                </div>
-                <div>
-                    <button 
-                        onClick={handleCreate} 
-                        disabled={creating || isLocked}
-                        className="px-6 py-2 bg-laplace-primary text-white rounded-xl font-bold flex items-center space-x-2 hover:bg-opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                        title={isLocked ? "Server must be offline to create backup" : ""}
-                    >
-                        {creating ? <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div> : <Plus size={18} />}
-                        <span>Create Backup</span>
-                    </button>
-                </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-6">
-                {backups.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                        <Archive size={48} className="mb-4 opacity-20" />
-                        <p>No backups available.</p>
+        <div>
+            <SectionHeader
+                eyebrow="Snapshots"
+                title="Manual backups"
+                lead="Take a one-off snapshot of the server directory. The server must be offline to guarantee consistency."
+                action={
+                    <div className="flex items-center gap-3">
+                        <StatusDot status={status.status} />
+                        <Button onClick={handleCreate} disabled={isLocked} loading={creating}>
+                            <Plus size={14} /> New backup
+                        </Button>
                     </div>
-                ) : (
-                    <div className="space-y-4">
-                        {backups.map(backup => (
-                            <div key={backup.id} className="bg-gray-50 rounded-2xl p-4 border border-gray-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                                <div className="flex items-center space-x-4">
-                                    <div className="p-3 bg-white rounded-xl border border-gray-200">
-                                        <HardDrive className="text-gray-400" size={24} />
-                                    </div>
-                                    <div>
-                                        <h3 className="font-bold text-laplace-darker text-sm">{backup.name}</h3>
-                                        <div className="flex items-center space-x-4 mt-1 text-xs text-gray-500">
-                                            <span className="flex items-center gap-1"><Clock size={12}/> {new Date(backup.timestamp).toLocaleString()}</span>
-                                            <span className="font-mono bg-gray-200 px-1.5 py-0.5 rounded">{formatSize(backup.size)}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                                
-                                <div className="flex items-center space-x-2 w-full sm:w-auto">
-                                    <button 
-                                        onClick={() => handleRestore(backup.id)}
-                                        disabled={isLocked}
-                                        className={`flex-1 sm:flex-none flex items-center justify-center space-x-2 px-4 py-2 border rounded-xl text-xs font-bold transition-colors 
-                                            ${isLocked 
-                                                ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed' 
-                                                : 'bg-white border-gray-200 hover:bg-gray-100 text-gray-700'
-                                            }`}
-                                        title={isLocked ? "Cannot restore while server is online" : "Restore this backup"}
-                                    >
-                                        {isLocked ? <Lock size={14} /> : <RotateCcw size={14} />}
-                                        <span>Restore</span>
-                                    </button>
-                                    
-                                    <button 
-                                        onClick={() => handleDownload(backup.id)}
-                                        className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-colors"
-                                        title="Download (Feature limited to Single File backups)"
-                                    >
-                                        <Download size={18} />
-                                    </button>
+                }
+            />
 
-                                    <button 
-                                        onClick={() => handleDelete(backup.id)}
-                                        className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
-                                    >
-                                        <Trash2 size={18} />
-                                    </button>
+            {isLocked ? (
+                <Card tone="cream" padded className="mb-6 flex items-start gap-3">
+                    <Lock size={16} className="mt-0.5 text-[color:var(--color-warning)] shrink-0" />
+                    <div className="text-[13px] text-[color:var(--color-body)] leading-snug">
+                        Snapshot creation and restoration are paused while the server is online or busy. Stop it from the dashboard or use the scheduled backups feature for automatic stop-snapshot-restart.
+                    </div>
+                </Card>
+            ) : (
+                <Card tone="cream" padded className="mb-6 flex items-start gap-3">
+                    <AlertTriangle size={16} className="mt-0.5 text-[color:var(--color-accent-ochre)] shrink-0" />
+                    <div className="text-[13px] text-[color:var(--color-body)] leading-snug">
+                        Restoring a snapshot overwrites the current server directory in place — make a fresh backup first if you might want to come back.
+                    </div>
+                </Card>
+            )}
+
+            {!currentServerId ? (
+                <Card tone="canvas" padded className="text-center py-16">
+                    <p className="text-[14px] text-[color:var(--color-muted)]">Pick a server to manage its backups.</p>
+                </Card>
+            ) : loading && backups.length === 0 ? (
+                <Card tone="canvas" padded className="flex items-center justify-center gap-3 py-16">
+                    <div className="w-4 h-4 rounded-full border-2 border-[color:var(--color-primary)] border-r-transparent animate-spin" />
+                    <span className="text-[14px] text-[color:var(--color-muted)]">Loading snapshots for {currentServerId}…</span>
+                </Card>
+            ) : backups.length === 0 ? (
+                <Card tone="canvas" padded className="text-center py-16">
+                    <p className="text-[14px] text-[color:var(--color-muted)]">No snapshots yet.</p>
+                </Card>
+            ) : (
+                <div className="space-y-3">
+                    {backups.map((backup) => (
+                        <div
+                            key={backup.id}
+                            className="flex items-center justify-between gap-6 px-5 py-4 rounded-md bg-[color:var(--color-canvas)] border border-[color:var(--color-hairline)]"
+                        >
+                            <div className="min-w-0">
+                                <div className="text-[14px] text-[color:var(--color-ink)] font-medium truncate">{backup.name}</div>
+                                <div className="flex items-center gap-3 mt-1 text-[12px] text-[color:var(--color-muted)]">
+                                    <span>{new Date(backup.timestamp).toLocaleString()}</span>
+                                    <Pill tone="neutral">{formatSize(backup.size)}</Pill>
                                 </div>
                             </div>
-                        ))}
-                    </div>
-                )}
-            </div>
-
-             {/* Footer Warning */}
-            <div className={`p-4 border-t text-xs flex items-center gap-2 ${isLocked ? 'bg-red-50 border-red-100 text-red-700' : 'bg-orange-50 border-orange-100 text-orange-800'}`}>
-                {isLocked ? <Lock size={16}/> : <AlertTriangle size={16} />}
-                <span>
-                    {isLocked 
-                        ? "Backup creation and restoration are disabled because the server is online or another runtime operation is in progress." 
-                        : "Restoring a backup will overwrite your current server files."}
-                </span>
-            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                                <Button variant="secondary" size="sm" onClick={() => handleRestore(backup.id)} disabled={isLocked}>
+                                    <RotateCcw size={13} /> Restore
+                                </Button>
+                                <Button variant="ghost" size="sm" onClick={() => handleDownload(backup.id)}>
+                                    <Download size={13} />
+                                </Button>
+                                <Button variant="ghost" size="sm" onClick={() => handleDelete(backup.id)}>
+                                    <Trash2 size={13} className="text-[color:var(--color-error)]" />
+                                </Button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

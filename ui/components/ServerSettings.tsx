@@ -1,290 +1,222 @@
-import React, { useState, useEffect } from 'react';
-import { Settings, Save, RefreshCw, Cpu, Layers, Shield, Globe, Terminal, Info } from 'lucide-react';
-import type { ServerConfig, ServerSettingsPayload } from '../types.ts';
-import { getAuthHeaders } from '../lib/api.ts';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Save, RefreshCw, AlertTriangle } from 'lucide-react';
+import type { ServerConfig, ServerSettingsPayload, ServerSummary } from '../types.ts';
+import { fetchScoped, postScoped } from '../lib/api.ts';
+import { Button, Card, Eyebrow, Input, NumberField, SectionHeader, Toggle } from './primitives.tsx';
 
 interface Props {
     notify?: (msg: string, type: 'success' | 'error' | 'info') => void;
+    currentServerId: string | null;
+    /** Provided by App for cross-server checks (e.g. port collision warnings). */
+    servers?: ServerSummary[];
 }
 
-export default function ServerSettings({ notify }: Props) {
+const memoryRegex = /^(\d+)([MG])$/i;
+function parseMemoryToMB(input: string): number | null {
+    const m = memoryRegex.exec(input.trim());
+    if (!m) return null;
+    const n = Number(m[1]);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return m[2].toUpperCase() === 'G' ? n * 1024 : n;
+}
+
+export default function ServerSettings({ notify, currentServerId, servers = [] }: Props) {
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [config, setConfig] = useState<ServerConfig | null>(null);
     const [properties, setProperties] = useState<Record<string, string>>({});
-    
-    // Quick Settings State
-    const [quickSettings, setQuickSettings] = useState({
-        motd: '',
-        maxPlayers: '20',
-        port: '25565',
-        whitelist: false,
-        viewDistance: '10'
-    });
+    const generationRef = useRef(0);
+
+    useEffect(() => {
+        setConfig(null);
+        setProperties({});
+    }, [currentServerId]);
 
     const fetchSettings = async () => {
+        if (!currentServerId) return;
+        const myGen = ++generationRef.current;
         setLoading(true);
         try {
-            const res = await fetch('/api/server/settings', {
-                headers: getAuthHeaders()
-            });
+            const res = await fetchScoped('/server/settings', currentServerId);
             const response = await res.json();
-            
+            if (generationRef.current !== myGen) return;
             if (res.ok && response.success) {
                 const data: ServerSettingsPayload = response.data;
                 setConfig(data.config);
                 setProperties(data.properties);
-                
-                // Map to quick settings
-                setQuickSettings({
-                    motd: data.properties['motd'] || '',
-                    maxPlayers: data.properties['max-players'] || '20',
-                    port: data.properties['server-port'] || '25565',
-                    whitelist: data.properties['white-list'] === 'true',
-                    viewDistance: data.properties['view-distance'] || '10'
-                });
             } else {
                 notify?.('Failed to load settings', 'error');
             }
-        } catch (e) {
-            notify?.('Network error', 'error');
+        } catch {
+            if (generationRef.current === myGen) notify?.('Network error', 'error');
+        } finally {
+            if (generationRef.current === myGen) setLoading(false);
         }
-        setLoading(false);
     };
 
-    useEffect(() => {
-        fetchSettings();
-    }, []);
+    useEffect(() => { fetchSettings(); }, [currentServerId]);
+
+    const portInput = properties['server-port'] || '25565';
+    const portNumber = Number.parseInt(portInput, 10);
+    const portCollidesWith = useMemo(() => {
+        if (!Number.isFinite(portNumber)) return null;
+        return servers.find((s) => s.id !== currentServerId && s.port === portNumber);
+    }, [servers, currentServerId, portNumber]);
+
+    const xmxMB = config ? parseMemoryToMB(config.javaArgs.xmx) : null;
+    const xmsMB = config ? parseMemoryToMB(config.javaArgs.xms) : null;
+    const memoryError = (xmxMB !== null && xmsMB !== null && xmsMB > xmxMB)
+        ? 'Initial RAM (Xms) cannot exceed Max RAM (Xmx). The JVM will refuse to launch.'
+        : null;
+    const memoryFormatError = config ? (
+        (config.javaArgs.xmx && parseMemoryToMB(config.javaArgs.xmx) === null) ||
+        (config.javaArgs.xms && parseMemoryToMB(config.javaArgs.xms) === null)
+    ) : false;
+
+    const canSave = !memoryError && !memoryFormatError;
 
     const handleSave = async () => {
-        if (!config) return;
-        setSaving(true);
-        
-        // Merge quick settings back into properties
-        const updatedProperties = { ...properties };
-        updatedProperties['motd'] = quickSettings.motd;
-        updatedProperties['max-players'] = quickSettings.maxPlayers;
-        updatedProperties['server-port'] = quickSettings.port;
-        updatedProperties['white-list'] = quickSettings.whitelist ? 'true' : 'false';
-        updatedProperties['view-distance'] = quickSettings.viewDistance;
-
-        try {
-            const res = await fetch('/api/server/settings', {
-                method: 'POST',
-                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({
-                    config: config,
-                    properties: updatedProperties
-                })
-            });
-            const response = await res.json();
-
-            if (res.ok && response.success) {
-                notify?.('Settings saved. Restart server to apply.', 'success');
-                // Refresh to ensure sync
-                fetchSettings();
-            } else {
-                notify?.(response.error || 'Failed to save settings', 'error');
-            }
-        } catch (e) {
-            notify?.('Network error saving settings', 'error');
+        if (!config || !currentServerId) return;
+        if (!canSave) {
+            notify?.(memoryError || 'Fix the highlighted fields before saving.', 'error');
+            return;
         }
+        setSaving(true);
+        try {
+            const res = await postScoped('/server/settings', currentServerId, { config, properties });
+            const response = await res.json();
+            if (res.ok && response.success) { notify?.('Settings saved · restart to apply', 'success'); fetchSettings(); }
+            else notify?.(response.error || 'Save failed', 'error');
+        } catch { notify?.('Network error', 'error'); }
         setSaving(false);
     };
 
-    const handleRawPropertyChange = (key: string, value: string) => {
-        setProperties(prev => ({ ...prev, [key]: value }));
-    };
-
-    const handleConfigChange = (section: keyof ServerConfig['javaArgs'], value: string) => {
+    const setProp = (key: string, value: string) => setProperties((p) => ({ ...p, [key]: value }));
+    const setJava = (k: 'xmx' | 'xms' | 'args', value: string) => {
         if (!config) return;
-        setConfig({
-            ...config,
-            javaArgs: {
-                ...config.javaArgs,
-                [section]: value
-            }
-        });
+        setConfig({ ...config, javaArgs: { ...config.javaArgs, [k]: value } });
+    };
+    const setCrash = (k: 'maxRestarts' | 'restartDelayMs' | 'resetAfterMs', value: number) => {
+        if (!config) return;
+        const policy = config.crashPolicy || { maxRestarts: 3, restartDelayMs: 5000, resetAfterMs: 5 * 60 * 1000 };
+        setConfig({ ...config, crashPolicy: { ...policy, [k]: value } });
     };
 
-    if (loading) return (
-        <div className="h-full flex items-center justify-center text-gray-400">
-            <RefreshCw className="animate-spin mr-2" /> Loading settings...
-        </div>
-    );
+    if (loading || !config) {
+        return (
+            <div className="flex items-center justify-center py-24">
+                <div className="w-5 h-5 rounded-full border-2 border-[color:var(--color-primary)] border-r-transparent animate-spin" />
+            </div>
+        );
+    }
+
+    const motd = properties['motd'] || '';
+    const maxPlayers = properties['max-players'] || '20';
+    const port = properties['server-port'] || '25565';
+    const viewDistance = properties['view-distance'] || '10';
+    const whitelist = properties['white-list'] === 'true';
+
+    const policy = config.crashPolicy || { maxRestarts: 3, restartDelayMs: 5000, resetAfterMs: 5 * 60 * 1000 };
 
     return (
-        <div className="h-full flex flex-col bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden relative">
-            
-            {/* Header / Actions */}
-            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white z-10">
-                <div>
-                    <h2 className="text-2xl font-bold text-laplace-darker flex items-center gap-2">
-                        <Settings className="text-laplace-primary" /> Server Configuration
-                    </h2>
-                    <p className="text-gray-400 text-sm mt-1">Manage gameplay settings and startup parameters.</p>
+        <div>
+            <SectionHeader
+                eyebrow="Configuration"
+                title="Server settings"
+                lead="JVM startup, gameplay tuning, crash policy, and the raw server.properties keys. Restart the server to apply most changes."
+                action={
+                    <div className="flex gap-2">
+                        <Button variant="secondary" size="md" onClick={fetchSettings}><RefreshCw size={14} /> Reload</Button>
+                        <Button size="md" onClick={handleSave} loading={saving} disabled={!canSave}><Save size={14} /> Save</Button>
+                    </div>
+                }
+            />
+
+            <Card tone="canvas" padded className="mb-5">
+                <Eyebrow className="mb-4">JVM startup</Eyebrow>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                    <Input
+                        label="Max RAM (Xmx)"
+                        value={config.javaArgs.xmx}
+                        onChange={(e) => setJava('xmx', e.target.value)}
+                        helper="e.g. 4G or 2048M"
+                        error={config.javaArgs.xmx && parseMemoryToMB(config.javaArgs.xmx) === null ? 'Use values like 4G or 2048M.' : undefined}
+                    />
+                    <Input
+                        label="Initial RAM (Xms)"
+                        value={config.javaArgs.xms}
+                        onChange={(e) => setJava('xms', e.target.value)}
+                        helper="e.g. 1G — must be ≤ Xmx"
+                        error={
+                            (config.javaArgs.xms && parseMemoryToMB(config.javaArgs.xms) === null)
+                                ? 'Use values like 1G or 1024M.'
+                                : memoryError || undefined
+                        }
+                    />
+                    <Input label="Extra Java flags" value={config.javaArgs.args} onChange={(e) => setJava('args', e.target.value)} placeholder="-XX:+UseG1GC ..." />
                 </div>
-                <div className="flex space-x-2">
-                    <button onClick={fetchSettings} className="p-2 text-gray-500 hover:bg-gray-100 rounded-xl transition-colors" title="Reload">
-                        <RefreshCw size={20} />
-                    </button>
-                    <button 
-                        onClick={handleSave} 
-                        disabled={saving}
-                        className="px-6 py-2 bg-laplace-primary text-white rounded-xl font-bold flex items-center space-x-2 hover:bg-opacity-90 transition-all disabled:opacity-50"
-                    >
-                        {saving ? <RefreshCw className="animate-spin" size={18} /> : <Save size={18} />}
-                        <span>Save Changes</span>
-                    </button>
+            </Card>
+
+            <Card tone="canvas" padded className="mb-5">
+                <Eyebrow className="mb-4">Gameplay</Eyebrow>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <Input label="MOTD" value={motd} onChange={(e) => setProp('motd', e.target.value)} />
+                    <Input
+                        label="Server port"
+                        value={port}
+                        onChange={(e) => setProp('server-port', e.target.value)}
+                        error={portCollidesWith ? `Port ${portCollidesWith.port} is already used by '${portCollidesWith.name}'.` : undefined}
+                    />
+                    <Input label="Max players" type="number" value={maxPlayers} onChange={(e) => setProp('max-players', e.target.value)} />
+                    <Input label="View distance" type="number" value={viewDistance} onChange={(e) => setProp('view-distance', e.target.value)} />
                 </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-6 space-y-8">
-                
-                {/* 1. Startup Logic */}
-                <section>
-                    <div className="flex items-center gap-2 mb-4 text-laplace-darker font-bold">
-                        <Terminal size={18} />
-                        <h3>Startup Parameters</h3>
+                <div className="mt-5 flex items-center justify-between p-4 rounded-md bg-[color:var(--color-surface-soft)]">
+                    <div>
+                        <div className="text-[14px] text-[color:var(--color-ink)] font-medium">Whitelist</div>
+                        <div className="text-[12px] text-[color:var(--color-muted)] mt-0.5">Only listed players can connect.</div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
-                            <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Max RAM (Xmx)</label>
-                            <input 
-                                type="text" 
-                                value={config?.javaArgs.xmx || ''} 
-                                onChange={(e) => handleConfigChange('xmx', e.target.value)}
-                                className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:border-laplace-primary"
-                            />
-                        </div>
-                        <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
-                            <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Start RAM (Xms)</label>
-                            <input 
-                                type="text" 
-                                value={config?.javaArgs.xms || ''} 
-                                onChange={(e) => handleConfigChange('xms', e.target.value)}
-                                className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:border-laplace-primary"
-                            />
-                        </div>
-                         <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
-                            <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Java Flags</label>
-                            <input 
-                                type="text" 
-                                value={config?.javaArgs.args || ''} 
-                                onChange={(e) => handleConfigChange('args', e.target.value)}
-                                placeholder="-XX:+UseG1GC..."
-                                className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:border-laplace-primary"
-                            />
-                        </div>
-                    </div>
-                </section>
+                    <Toggle
+                        checked={whitelist}
+                        onChange={(next) => setProp('white-list', next ? 'true' : 'false')}
+                        label={whitelist ? 'On' : 'Off'}
+                    />
+                </div>
+            </Card>
 
-                {/* 2. Common Properties */}
-                <section>
-                    <div className="flex items-center gap-2 mb-4 text-laplace-darker font-bold">
-                        <Globe size={18} />
-                        <h3>Gameplay Settings</h3>
-                    </div>
-                    <div className="bg-gray-50 rounded-xl border border-gray-100 p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-                        
-                        {/* Whitelist Toggle */}
-                        <div className="flex items-center justify-between col-span-full pb-6 border-b border-gray-200">
-                            <div>
-                                <h4 className="font-bold text-gray-700">Access Mode</h4>
-                                <p className="text-xs text-gray-400 mt-1">Determines who can join the server.</p>
-                            </div>
-                            <div className="flex items-center bg-gray-200 rounded-lg p-1">
-                                <button 
-                                    onClick={() => setQuickSettings({...quickSettings, whitelist: false})}
-                                    className={`px-4 py-2 rounded-md text-xs font-bold transition-all ${!quickSettings.whitelist ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500'}`}
-                                >
-                                    Blacklist Mode
-                                </button>
-                                <button 
-                                    onClick={() => setQuickSettings({...quickSettings, whitelist: true})}
-                                    className={`px-4 py-2 rounded-md text-xs font-bold transition-all ${quickSettings.whitelist ? 'bg-white shadow-sm text-green-600' : 'text-gray-500'}`}
-                                >
-                                    Whitelist Mode
-                                </button>
-                            </div>
-                        </div>
+            <Card tone="canvas" padded className="mb-5">
+                <Eyebrow className="mb-4">Crash recovery</Eyebrow>
+                <p className="text-[13px] text-[color:var(--color-muted)] mb-4 max-w-2xl">
+                    How aggressively the panel restarts a crashed server. After a stable run, the crash counter resets — so a long-running server isn't stuck at "max attempts reached" because of an old run.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                    <NumberField label="Max restart attempts" value={policy.maxRestarts} onChange={(n) => setCrash('maxRestarts', n)} min={0} max={10} />
+                    <NumberField label="Restart delay" value={policy.restartDelayMs / 1000} onChange={(n) => setCrash('restartDelayMs', n * 1000)} min={0} max={120} suffix="seconds" />
+                    <NumberField label="Reset counter after" value={policy.resetAfterMs / 60000} onChange={(n) => setCrash('resetAfterMs', n * 60000)} min={1} max={1440} suffix="minutes" />
+                </div>
+            </Card>
 
-                        {/* Fields */}
-                        <div>
-                            <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Server Name (MOTD)</label>
-                            <input 
-                                type="text" 
-                                value={quickSettings.motd} 
-                                onChange={(e) => setQuickSettings({...quickSettings, motd: e.target.value})}
-                                className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-laplace-primary"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Max Players</label>
-                            <input 
-                                type="number" 
-                                value={quickSettings.maxPlayers} 
-                                onChange={(e) => setQuickSettings({...quickSettings, maxPlayers: e.target.value})}
-                                className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-laplace-primary"
-                            />
-                        </div>
-                         <div>
-                            <label className="block text-xs font-bold text-gray-400 uppercase mb-2">View Distance</label>
-                            <input 
-                                type="number" 
-                                value={quickSettings.viewDistance} 
-                                onChange={(e) => setQuickSettings({...quickSettings, viewDistance: e.target.value})}
-                                className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-laplace-primary"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Server Port</label>
-                            <input 
-                                type="text" 
-                                value={quickSettings.port} 
-                                disabled
-                                className="w-full bg-gray-100 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-500 cursor-not-allowed"
-                            />
-                            <p className="text-[10px] text-gray-400 mt-1">Port changes require manual property file editing.</p>
-                        </div>
-
-                    </div>
-                </section>
-
-                {/* 3. Raw Editor */}
-                <section>
-                     <div className="flex items-center gap-2 mb-4 text-laplace-darker font-bold">
-                        <Layers size={18} />
-                        <h3>Advanced Properties</h3>
-                    </div>
-                    <div className="bg-gray-900 rounded-xl p-4 font-mono text-xs overflow-x-auto">
-                        <table className="w-full text-left">
-                            <thead>
-                                <tr className="text-gray-500 border-b border-gray-800">
-                                    <th className="py-2 w-1/3">Property Key</th>
-                                    <th className="py-2">Value</th>
+            <Card tone="canvas" padded>
+                <Eyebrow className="mb-4">Advanced — server.properties</Eyebrow>
+                <div className="rounded-md bg-[color:var(--color-surface-dark)] text-[color:var(--color-on-dark)] p-5 font-mono text-[12.5px] max-h-[480px] overflow-auto">
+                    <table className="w-full">
+                        <tbody>
+                            {Object.keys(properties).sort().map((key) => (
+                                <tr key={key} className="border-b border-white/5">
+                                    <td className="py-2 pr-4 text-[color:var(--color-accent-sage)] align-top w-[40%] break-all">{key}</td>
+                                    <td className="py-2">
+                                        <input
+                                            type="text"
+                                            value={properties[key]}
+                                            onChange={(e) => setProp(key, e.target.value)}
+                                            className="w-full bg-transparent text-[color:var(--color-on-dark)] focus:outline-none"
+                                        />
+                                    </td>
                                 </tr>
-                            </thead>
-                            <tbody>
-                                {Object.entries(properties).map(([key, value]) => (
-                                    <tr key={key} className="border-b border-gray-800/50 hover:bg-gray-800/30">
-                                        <td className="py-2 text-blue-400 pr-4">{key}</td>
-                                        <td className="py-2">
-                                            <input 
-                                                type="text" 
-                                                value={value} 
-                                                onChange={(e) => handleRawPropertyChange(key, e.target.value)}
-                                                className="bg-transparent text-gray-300 w-full focus:outline-none focus:text-white"
-                                            />
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-            </div>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </Card>
         </div>
     );
 }

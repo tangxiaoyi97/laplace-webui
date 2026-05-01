@@ -499,7 +499,7 @@ public async onUnload() {
 ## Worked example
 
 The repo ships
-[`laplace-core/backend/plugins/extension-example/`](../laplace-core/backend/plugins/extension-example/)
+[`examples/extension-example/`](./examples/extension-example/)
 as a reference. It registers:
 
 - One section (`Extension demo`, opens an iframe at
