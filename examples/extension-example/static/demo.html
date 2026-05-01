@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Extension Example · Demo</title>
+    <link rel="stylesheet" href="/api/webui/tokens.css" />
+    <style>
+      body { padding: 32px; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+      .stat-value { font-size: 36px; font-weight: 700; color: var(--color-ink); letter-spacing: -0.6px; }
+      .stat-label { font-size: 12px; color: var(--color-muted); margin-top: 4px; }
+      kbd {
+        display: inline-block;
+        padding: 2px 6px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        background: var(--color-surface-card);
+        border: 1px solid var(--color-hairline);
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="r-eyebrow">Plugin · extension-example</div>
+    <h1 class="r-display" style="font-size: 36px; margin: 12px 0 8px;">A section in your sidebar.</h1>
+    <p style="max-width: 60ch; line-height: 1.55;">
+      This page is rendered inside an iframe by the laplace WebUI. The plugin registered itself via
+      <kbd>ctx.services.get('webui:extensions').registerSection({...})</kbd>. Open
+      <kbd>backend/plugins/extension-example/index.ts</kbd> to see the source.
+    </p>
+
+    <div class="grid">
+      <div class="r-card r-card-cream">
+        <div class="r-eyebrow">Sandboxed</div>
+        <div class="stat-value">iframe</div>
+        <div class="stat-label">Same-origin · scripts allowed · forms allowed</div>
+      </div>
+      <div class="r-card r-card-card">
+        <div class="r-eyebrow">Styled with</div>
+        <div class="stat-value">tokens.css</div>
+        <div class="stat-label">Pulled live from <kbd>/api/webui/tokens.css</kbd></div>
+      </div>
+      <div class="r-card r-card-dark">
+        <div class="r-eyebrow" style="color: var(--color-on-dark-soft);">Override</div>
+        <div class="stat-value" style="color: var(--color-on-dark);">CSS</div>
+        <div class="stat-label" style="color: var(--color-on-dark-soft);">via <kbd style="background:#252320;border-color:#333;color:#faf9f5;">registerStylesheet</kbd></div>
+      </div>
+      <div class="r-card">
+        <div class="r-eyebrow">Buttons</div>
+        <div style="margin-top: 12px; display: flex; gap: 8px;">
+          <button class="r-button">Primary</button>
+          <button class="r-button r-button-secondary">Secondary</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
