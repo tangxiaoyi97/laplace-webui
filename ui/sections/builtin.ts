@@ -53,7 +53,10 @@ export const BUILTIN_SECTIONS: SectionDescriptor[] = [
         component: wrap(ServersOverview, (p) => ({
             servers: p.servers,
             defaultServerId: p.defaultServerId,
-            onSelect: (id: string) => p.switchServer(id),
+            onSelect: async (id: string) => {
+                await p.switchServer(id);
+                p.setView('files');
+            },
             onCreateNew: () => p.setView(ViewState.SERVER_WIZARD),
             onDeleted: async (deletedId: string) => p.handleServerDeleted(deletedId),
         })),
